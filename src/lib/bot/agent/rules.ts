@@ -44,13 +44,32 @@ const RE = {
   overview: /(总览|概况|整体|大盘|总体|全局|所有竞品|各个竞品|各竞品)/,
   detail: /(情况|怎么样|怎样|详情|数据|投放|动态|表现)/,
   search: /(找|搜|查|看看).{0,6}(账号|博主|达人|kol|up主)/i,
+  weekly: /(周报|(本|这)周(的)?(总结|情况|动态|概况|小结))/,
+  trend: /(趋势|走势|曲线|增长|涨了|跌了|每周|周度|近.{1,3}周)/,
 };
 
+/** 用户要的是"分析解读"而不只是列数据 → 查完之后再让模型解读一次（需要大模型）。 */
+const ANALYZE_RE = /(为什么|为何|原因|分析|解读|总结|复盘|怎么看|怎么回事|意味着|说明什么|有什么(变化|区别|不同|特点|规律)|变化|洞察|建议|应该|值得)/;
+export const wantsAnalysis = (text: string) => ANALYZE_RE.test(text);
+
+/** 指代上一轮讨论的竞品："它""刚才那个""那新增呢"。 */
+const PRONOUN_RE = /(它|他们|她们|这个|那个|这家|那家|刚才|上面|上一个|前面那|^那)/;
+
+/**
+ * 修改类意图（新增竞品、改监测词、标记账号、周报开关）需要抽取多个参数，规则做不好也不该做——
+ * 交给大模型；没开大模型时由引擎提示。必须先于下面的查询规则判断，否则"新增竞品…"会被当成"新增账号"查询。
+ */
+const WRITE_RE = /((添加|新增|新建|创建|增加|加上?|删除|删掉|去掉|移除|修改|更新|调整|改成?)\s*(一个|个)?\s*(竞品|监测词|关键词)(?!数据|账号)|(标记|标注|打上?|加上?).{0,12}(标签|重点关注|已联系|排除)|(开启|打开|关闭|停止|取消|设置|设为|改到).{0,6}周报|周报.{0,6}(开启|关闭|推送|改到))/;
+export const isWriteIntent = (text: string) => WRITE_RE.test(text);
+
 /** 返回 null 表示规则无法判断，交给后续环节。 */
-export function ruleIntent(text: string, catalog: Catalog): Plan | null {
+export function ruleIntent(text: string, catalog: Catalog, opts: { last?: string } = {}): Plan | null {
   const t = text.trim();
   if (!t) return null;
-  const comps = mentionedCompetitors(t, catalog);
+  if (isWriteIntent(t)) return null;
+  let comps = mentionedCompetitors(t, catalog);
+  // "它 / 那新增呢"：沿用上一轮讨论的竞品（必须仍在名单里）
+  if (!comps.length && opts.last && catalog.some((c) => c.name === opts.last) && PRONOUN_RE.test(t)) comps = [opts.last];
   const days = extractDays(t);
   const mk = (calls: ToolCall[]): Plan => ({ calls, source: "rules" });
   const ask = (q: string): Plan => ({ calls: [], clarify: q, source: "rules" });
@@ -69,6 +88,8 @@ export function ruleIntent(text: string, catalog: Catalog): Plan | null {
     if (comps.length < 2) return ask(`要对比哪两个竞品？现有：${names}`);
     return mk([{ tool: "compare_competitors", args: { competitor_a: comps[0], competitor_b: comps[1] } }]);
   }
+  if (RE.weekly.test(t)) return mk([{ tool: "weekly_report", args: {} }]);
+  if (RE.trend.test(t) && !RE.fresh.test(t)) return mk([{ tool: "trend", args: comps[0] ? { competitor: comps[0] } : {} }]);
   if (RE.repeat.test(t)) return mk([{ tool: "repeat_accounts", args: comps[0] ? { competitor: comps[0] } : {} }]);
   if (RE.fresh.test(t)) return mk([{ tool: "new_accounts", args: comps[0] ? { competitor: comps[0] } : {} }]);
   if (RE.usage.test(t)) return mk([{ tool: "usage", args: {} }]);
@@ -82,6 +103,8 @@ export function ruleIntent(text: string, catalog: Catalog): Plan | null {
     return kw ? mk([{ tool: "search_accounts", args: { keyword: kw } }]) : ask("你想找哪个账号？说个名字关键词就行");
   }
   if (RE.overview.test(t) && !comps.length) return mk([{ tool: "overview", args: {} }]);
+  // 同时提到两个竞品又没说要什么：最可能想看它们的关系
+  if (comps.length >= 2) return mk([{ tool: "compare_competitors", args: { competitor_a: comps[0], competitor_b: comps[1] } }]);
   if (comps.length) return mk([{ tool: "competitor_detail", args: { competitor: comps[0] } }]);
   if (RE.overview.test(t) || RE.detail.test(t)) return mk([{ tool: "overview", args: {} }]);
   return null;

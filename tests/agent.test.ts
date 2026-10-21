@@ -87,10 +87,10 @@ describe("工具注册表", () => {
   it("每个工具的 schema 合法，参数校验会拦截坏输入", () => {
     for (const t of TOOLS) expect(t.schema.type).toBe("object");
     expect(toolByName("run_crawl")!.billed).toBe(true);
-    expect(toolByName("export_excel")!.toCommand({ kind: "rm -rf", competitor: "LibTV" })).toHaveProperty("error");
-    expect(toolByName("compare_competitors")!.toCommand({ competitor_a: "A" })).toHaveProperty("error");
-    expect(toolByName("run_crawl")!.toCommand({ competitor: "LibTV", days: 9999 })).toEqual({ name: "抓取", args: ["LibTV"] });
-    expect(toolByName("run_crawl")!.toCommand({ competitor: "LibTV", days: 14 })).toEqual({ name: "抓取", args: ["LibTV", "14天"] });
+    expect(toolByName("export_excel")!.toCommand!({ kind: "rm -rf", competitor: "LibTV" })).toHaveProperty("error");
+    expect(toolByName("compare_competitors")!.toCommand!({ competitor_a: "A" })).toHaveProperty("error");
+    expect(toolByName("run_crawl")!.toCommand!({ competitor: "LibTV", days: 9999 })).toEqual({ name: "抓取", args: ["LibTV"] });
+    expect(toolByName("run_crawl")!.toCommand!({ competitor: "LibTV", days: 14 })).toEqual({ name: "抓取", args: ["LibTV", "14天"] });
   });
 });
 

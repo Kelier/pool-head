@@ -45,7 +45,15 @@ export class FeishuClient implements Sender {
   }
 
   async text(chatId: string, text: string, replyTo?: string) { await this.send(chatId, "text", { text }, replyTo); }
-  async card(chatId: string, card: Card, replyTo?: string) { await this.send(chatId, "interactive", card, replyTo); }
+  async card(chatId: string, card: Card, replyTo?: string): Promise<string | void> {
+    const j = await this.send(chatId, "interactive", card, replyTo);
+    return j.data?.message_id as string | undefined;
+  }
+
+  /** 更新应用自己发的卡片（PATCH /im/v1/messages/:id）。卡片 config 需带 update_multi:true，见 cards.ts 的 updatable。 */
+  async update(messageId: string, card: Card) {
+    await this.call(`/im/v1/messages/${messageId}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ content: JSON.stringify(card) }) });
+  }
 
   async file(chatId: string, name: string, data: Buffer, replyTo?: string) {
     const ext = name.split(".").pop()?.toLowerCase();

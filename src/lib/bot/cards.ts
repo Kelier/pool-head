@@ -3,7 +3,7 @@ import type { Card } from "./types";
 export type Template = "blue" | "wathet" | "turquoise" | "green" | "yellow" | "orange" | "red" | "carmine" | "violet" | "purple" | "indigo" | "grey";
 
 /** 飞书交互卡片（1.0 结构）。正文用 markdown；总大小需 < 30KB，所以列表统一截断。 */
-export function card(title: string, template: Template, md: string[], opts: { note?: string; links?: Array<{ text: string; url: string }> } = {}): Card {
+export function card(title: string, template: Template, md: string[], opts: { note?: string; links?: Array<{ text: string; url: string }>; updatable?: boolean } = {}): Card {
   const elements: Array<Record<string, unknown>> = md.filter(Boolean).map((content) => ({ tag: "markdown", content }));
   if (opts.links?.length) {
     elements.push({ tag: "hr" });
@@ -13,7 +13,7 @@ export function card(title: string, template: Template, md: string[], opts: { no
     });
   }
   if (opts.note) elements.push({ tag: "note", elements: [{ tag: "plain_text", content: opts.note }] });
-  return { config: { wide_screen_mode: true }, header: { title: { tag: "plain_text", content: title }, template }, elements };
+  return { config: { wide_screen_mode: true, ...(opts.updatable ? { update_multi: true } : {}) }, header: { title: { tag: "plain_text", content: title }, template }, elements };
 }
 
 export const link = (text: string, url: string) => `[${text}](${url})`;
