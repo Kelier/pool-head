@@ -13,3 +13,4 @@ export function botDeps(backend: BotBackend): EventDeps {
 export { handleMessageEvent } from "./events";
 export { directBackend, httpBackend } from "./backend";
 export { startAlertPusher } from "./watch";
+export { startDigest } from "./agent";

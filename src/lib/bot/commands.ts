@@ -9,6 +9,7 @@ import { PLATFORMS } from "../platforms";
 import type { Platform } from "../types";
 import { card, day, fmtN, link, MAX_LIST, pct, trunc } from "./cards";
 import { watchTask } from "./watch";
+import { llmUsageToday } from "./agent/budget";
 import type { BotCtx, Command, Reply } from "./types";
 
 const TASK_STATUS: Record<string, string> = {
@@ -36,10 +37,11 @@ export function parseDays(arg?: string): number | null {
 type Found = { c: Competitor } | { error: string };
 export function findCompetitor(q: string): Found {
   const all = listCompetitors();
-  const lo = q.toLowerCase();
-  const exact = all.filter((c) => c.name.toLowerCase() === lo);
+  const norm = (x: string) => x.toLowerCase().replace(/\s+/g, "");
+  const lo = norm(q);
+  const exact = all.filter((c) => norm(c.name) === lo);
   if (exact.length === 1) return { c: exact[0] };
-  const part = all.filter((c) => c.name.toLowerCase().includes(lo));
+  const part = all.filter((c) => norm(c.name).includes(lo));
   if (part.length === 1) return { c: part[0] };
   if (!part.length) return { error: `找不到竞品「${q}」。现有竞品：${all.map((c) => c.name).join("、") || "暂无（请先在控制台创建）"}` };
   return { error: `「${q}」匹配到多个竞品：${part.map((c) => c.name).join("、")}，请写全名` };
@@ -54,9 +56,16 @@ const COMMANDS: Command[] = [
     names: ["帮助", "help", "?", "菜单"], usage: "帮助", desc: "查看可用指令", role: "member",
     run: async (_a, ctx) => ({
       card: card("投放监测机器人", "violet", [
-        "直接发送（群里请 @我）：",
-        ...COMMANDS.filter((c) => ctx.role === "admin" || c.role === "member").map((c) => `**${c.usage}**　${c.desc}`),
-      ], { note: ctx.role === "admin" ? "你是管理员：可发起抓取" : "你是成员：只读查询与导出" }),
+        "**直接用大白话问我**（群里请 @我），比如：",
+        "• 现在整体情况怎么样？",
+        "• LibTV 最近有什么新账号 / 哪些账号被反复投放？",
+        "• 对比 LibTV 和 即梦AI，为什么重合这么多？",
+        "• LibTV 近 8 周的投放趋势 / 这周的周报",
+        "• 把 LibTV 的监测报告导出成 Excel",
+        "• 接着问就行：“那它的新增呢？”",
+        ...(ctx.role === "admin" ? ["**管理员还可以说**：", "• 抓取 LibTV 近 30 天 · 新增竞品 xxx · 给 LibTV 加监测词 xxx · 把 xxx 标记为重点关注", "• 开启周报，每周一 9 点（先在群里发“订阅”）", "（修改类操作我会先复述一遍，等你回复「确认」才执行）"] : []),
+        "**指令速查**（等价的固定写法）：" + COMMANDS.filter((c) => ctx.role === "admin" || c.role === "member").map((c) => c.usage).join(" · "),
+      ], { note: ctx.role === "admin" ? "你是管理员：可发起抓取与修改" : "你是成员：只读查询与导出" }),
     }),
   },
   {
@@ -204,7 +213,12 @@ const COMMANDS: Command[] = [
     run: async (_a, ctx) => {
       const b = budgetStatus();
       const u = usage();
-      return { card: card("API 用量", "grey", [`今日已调用 **${b.used}** / ${b.limit}（${pct(b.used / b.limit)}）`, `近 14 天真实调用 ${u.real14d} 次 · 缓存命中率 ${pct(u.cacheHitRate)}`], { links: [{ text: "调用监控", url: url(ctx, "/settings?tab=usage") }] }) };
+      const l = llmUsageToday();
+      return { card: card("API 用量", "grey", [
+        `今日已调用 **${b.used}** / ${b.limit}（${pct(b.used / b.limit)}）`,
+        `近 14 天真实调用 ${u.real14d} 次 · 缓存命中率 ${pct(u.cacheHitRate)}`,
+        ...(l.calls ? [`智能问答今日 **${l.calls}** 次 · ${l.users} 人 · 输入 ${fmtN(l.tokensIn)} / 输出 ${fmtN(l.tokensOut)} token${l.cacheHit ? `（输入命中缓存 ${pct(l.cacheHit / Math.max(l.tokensIn, 1))}）` : ""}`] : []),
+      ], { links: [{ text: "调用监控", url: url(ctx, "/settings?tab=usage") }] }) };
     },
   },
   {

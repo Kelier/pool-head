@@ -122,6 +122,29 @@ function migrate(d: DatabaseSync) {
       chat_id TEXT PRIMARY KEY,
       created_at INTEGER NOT NULL
     );
+    -- 机器人：多轮上下文（按 会话:用户）、待确认的修改类操作、大模型用量（按天按人，重启不丢）
+    CREATE TABLE IF NOT EXISTS bot_sessions (
+      key TEXT PRIMARY KEY,
+      turns TEXT NOT NULL DEFAULT '[]',
+      last TEXT NOT NULL DEFAULT '{}',
+      updated_at INTEGER NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS bot_pending (
+      key TEXT PRIMARY KEY,
+      kind TEXT NOT NULL,
+      payload TEXT NOT NULL,
+      summary TEXT NOT NULL,
+      expires INTEGER NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS bot_llm_usage (
+      day TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      calls INTEGER NOT NULL DEFAULT 0,
+      tokens_in INTEGER NOT NULL DEFAULT 0,
+      tokens_out INTEGER NOT NULL DEFAULT 0,
+      cache_hit INTEGER NOT NULL DEFAULT 0,
+      PRIMARY KEY (day, user_id)
+    );
     CREATE TABLE IF NOT EXISTS alerts (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       ts INTEGER NOT NULL,

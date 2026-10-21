@@ -1,7 +1,8 @@
 // 事件适配：飞书 im.message.receive_v1 → 指令层 → 回复。长连接与 webhook 两种接入方式共用。
 import { roleOf, RateLimiter } from "./auth";
 import { dispatch, parseCommand, cleanText, findCommand, ALL_COMMANDS, type IntentResolver } from "./commands";
-import { cancelPending, CANCEL_RE, CONFIRM_RE, confirmPending, handleNaturalLanguage, hasPending } from "./agent";
+import { agentMode, cancelPending, CANCEL_RE, CONFIRM_RE, confirmPending, handleNaturalLanguage, hasPending, ProgressCard } from "./agent";
+import { card } from "./cards";
 import type { BotBackend, BotCtx, Sender } from "./types";
 
 type Env = Record<string, string | undefined>;
@@ -69,15 +70,22 @@ export async function handleMessageEvent(ev: MessageEvent, deps: EventDeps): Pro
   let text = "";
   try { text = (JSON.parse(m.content) as { text?: string }).text ?? ""; } catch { return reply("消息格式无法识别。"); }
   const parsed = parseCommand(text);
-  if (parsed && EXPENSIVE.has(parsed.name) && role === "admin" && !expensive.allow(userId)) return reply("抓取次数过多（每人每小时最多 5 次），请稍后再试。");
+  // 意图层（自然语言）。智能模式下，只有「/指令」或不带参数的单个指令词走固定指令；
+  // 其余一律先当人话理解——"复投 libtv""看看libtv最近有啥新账号"都行，不必记语法。
+  // 规则模式下保持原样：认得的指令词直接执行，其余才走自然语言。
+  const known = !!(parsed && findCommand(parsed.name));
+  const explicit = /^\s*[/／]/.test(cleanText(text)) || (known && parsed!.args.length === 0);
+  const viaAgent = !known || (agentMode(env) === "llm" && !explicit);
+  // 只对会直接执行的抓取计数；经意图层的抓取要等"确认"那一步才计数
+  if (!viaAgent && parsed && EXPENSIVE.has(parsed.name) && role === "admin" && !expensive.allow(userId)) return reply("抓取次数过多（每人每小时最多 5 次），请稍后再试。");
 
   const ctx: BotCtx = {
     userId, chatId: m.chat_id, chatType: m.chat_type, role, sender: deps.sender, backend: deps.backend,
     baseUrl: env.APP_PUBLIC_URL || "http://localhost:3111",
   };
+  let progress: ProgressCard | undefined;
   try {
-    // 不是已知指令 → 意图层：确认/取消待办 → 自然语言解析（规则优先，其次大模型）→ 复用现有指令
-    if (!(parsed && findCommand(parsed.name))) {
+    if (viaAgent) {
       const clean = cleanText(text);
       const confirm = CONFIRM_RE.test(clean), cancel = CANCEL_RE.test(clean);
       if (confirm || cancel) {
@@ -87,15 +95,33 @@ export async function handleMessageEvent(ev: MessageEvent, deps: EventDeps): Pro
         return reply((await confirmPending(ctx)).text!);
       }
       if (agentLimit.allow(userId)) {
-        const nl = await handleNaturalLanguage(clean, ctx, { env, fetch: deps.llmFetch });
+        // 大模型回答要几秒：先发"处理中"占位卡，之后原地刷新成答案（平台不支持更新时自动退化为直接发结果）
+        progress = new ProgressCard(deps.sender, m.chat_id, m.message_id);
+        const nl = await handleNaturalLanguage(clean, ctx, { env, fetch: deps.llmFetch, progress });
         if (nl) {
-          if (nl.understood) await reply(`🤖 理解为：${nl.understood}`);
-          for (const r of nl.replies) {
+          const head = nl.understood ? `🤖 理解为：${nl.understood}` : "";
+          const body = [nl.analysis, nl.note].filter(Boolean).join("\n");
+          const replies = [...nl.replies];
+          if (progress.active) {
+            // 占位卡变成答案：有解读放解读；没有解读时放"理解为"；只有追问/拒绝时把第一条文字放进去
+            const text0 = !head && !body && replies[0]?.text && !replies[0].card && !replies[0].file ? replies.shift()!.text! : "";
+            const done = await progress.finish(card(head || "🤖 回复", "violet", [body || text0 || "结果见下方。"], { updatable: true }));
+            if (!done) { if (head) await reply(head); if (body) await deps.sender.card(m.chat_id, card("📝 解读", "violet", [body]), m.message_id); }
+          } else {
+            if (head) await reply(head);
+            if (body) await deps.sender.card(m.chat_id, card("📝 解读", "violet", [body]), m.message_id);
+          }
+          for (const r of replies) {
             if (r.card) await deps.sender.card(m.chat_id, r.card, m.message_id);
             if (r.file) await deps.sender.file(m.chat_id, r.file.name, r.file.data, m.message_id);
             if (r.text) await reply(r.text);
           }
           return;
+        }
+        // 没听懂：别让"处理中"卡片一直挂着
+        if (progress.active) {
+          await progress.finish(card("🤖 回复", "grey", [known ? "已按指令处理。" : "这个我暂时处理不了，发送「帮助」看看我能做什么。"], { updatable: true }));
+          if (!known) return;
         }
       } else return reply("请求太频繁了，稍后再试。");
     }
@@ -105,6 +131,7 @@ export async function handleMessageEvent(ev: MessageEvent, deps: EventDeps): Pro
     if (r.text) await reply(r.text);
   } catch (e) {
     console.error("[bot] dispatch", e);
-    await reply(`出错了：${(e as Error).message}`).catch(() => {});
+    const msg = `出错了：${(e as Error).message}`;
+    if (!(await progress?.finish(card("🤖 出错了", "red", [msg], { updatable: true })))) await reply(msg).catch(() => {});
   }
 }

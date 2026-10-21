@@ -1,7 +1,7 @@
 // 飞书机器人 · 长连接模式（无需公网地址，适合本机 / 内网服务器）。
 // 用法：pnpm bot      需要先启动 Web 应用（pnpm dev / pnpm start），写操作经 HTTP 转给它，保证 TikHub 限速只有一份。
 import * as lark from "@larksuiteoapi/node-sdk";
-import { botDeps, handleMessageEvent, httpBackend, startAlertPusher } from "../src/lib/bot";
+import { botDeps, handleMessageEvent, httpBackend, startAlertPusher, startDigest } from "../src/lib/bot";
 import type { MessageEvent } from "../src/lib/bot/events";
 
 const appId = process.env.FEISHU_APP_ID, appSecret = process.env.FEISHU_APP_SECRET;
@@ -21,5 +21,8 @@ const dispatcher = new lark.EventDispatcher({}).register({
 
 const ws = new lark.WSClient({ appId, appSecret, domain: process.env.FEISHU_BASE_URL?.includes("larksuite") ? lark.Domain.Lark : lark.Domain.Feishu, loggerLevel: lark.LoggerLevel.info });
 ws.start({ eventDispatcher: dispatcher });
-if (process.env.FEISHU_PUSH_ALERTS !== "0") startAlertPusher(deps.sender, process.env.APP_PUBLIC_URL || "http://localhost:3111");
+if (process.env.FEISHU_PUSH_ALERTS !== "0") {
+  startAlertPusher(deps.sender, process.env.APP_PUBLIC_URL || "http://localhost:3111");
+  startDigest(deps.sender, process.env.APP_PUBLIC_URL || "http://localhost:3111"); // 周报：到点才发，见 BOT_DIGEST / 「开启周报」
+}
 console.log(`[bot] 长连接已启动；Web 应用：${appUrl}`);
