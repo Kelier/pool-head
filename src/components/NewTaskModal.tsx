@@ -6,7 +6,7 @@ import { Modal, Seg } from "./ui";
 
 export type Preset = { competitorId?: number; name?: string; keywords?: string[]; platforms?: string[] };
 
-const NEEDS_ENRICH = new Set(["xiaohongshu", "kuaishou", "bilibili"]); // 需额外调用补粉丝数
+const NEEDS_ENRICH = new Set(["xiaohongshu", "kuaishou", "bilibili", "wechat_channels"]); // 需额外调用补粉丝数
 
 /** 新建抓取任务（临时任务或指定竞品）。预估调用量与服务端公式一致。 */
 export function NewTaskModal({ preset, onClose, onCreated }: { preset?: Preset; onClose: () => void; onCreated: (id: number) => void }) {

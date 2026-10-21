@@ -52,7 +52,7 @@ const comp = { type: "string", description: "竞品名称，必须是竞品名�
 /** "a, b，c、d" → ["a","b","c","d"]，去重、限长、限个数 */
 const list = (v: unknown, max = 10) => [...new Set(String(v ?? "").split(/[,，、;；\n]+/).map((s) => s.trim().slice(0, 30)).filter(Boolean))].slice(0, max);
 
-const PLATFORM_ALIAS: Record<string, Platform> = { 抖音: "douyin", douyin: "douyin", 小红书: "xiaohongshu", xhs: "xiaohongshu", xiaohongshu: "xiaohongshu", 快手: "kuaishou", kuaishou: "kuaishou", b站: "bilibili", 哔哩哔哩: "bilibili", bilibili: "bilibili" };
+const PLATFORM_ALIAS: Record<string, Platform> = { 抖音: "douyin", douyin: "douyin", 小红书: "xiaohongshu", xhs: "xiaohongshu", xiaohongshu: "xiaohongshu", 快手: "kuaishou", kuaishou: "kuaishou", b站: "bilibili", 哔哩哔哩: "bilibili", bilibili: "bilibili", 视频号: "wechat_channels", 微信视频号: "wechat_channels", wechat_channels: "wechat_channels", 公众号: "wechat_mp", 微信公众号: "wechat_mp", wechat_mp: "wechat_mp" };
 function parsePlatforms(v: unknown): Platform[] | { error: string } {
   const out: Platform[] = [];
   for (const w of list(v, 4)) {
@@ -164,7 +164,7 @@ export const TOOLS: ToolDef[] = [
       properties: {
         name: { type: "string", description: "竞品名称" },
         keywords: { type: "string", description: "监测关键词，用逗号分隔" },
-        platforms: { type: "string", description: "平台，用逗号分隔，可选：抖音、小红书、快手、B站" },
+        platforms: { type: "string", description: "平台，用逗号分隔，可选：抖音、小红书、快手、B站、视频号、公众号" },
       },
     },
     propose: (a) => {

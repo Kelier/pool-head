@@ -21,7 +21,8 @@ export function resolveRange(t: TaskConfig["time"], now = Date.now()): { from: n
 export function estimateCalls(cfg: TaskConfig): number {
   const search = cfg.platforms.length * cfg.keywords.length * cfg.maxPages;
   // 需单独补粉丝数的平台：每个命中账号 1 次调用，粗估 = 每页约 12 个账号
-  const enrich = cfg.platforms.filter((p) => PLATFORMS[p].followers).length * Math.min(100, cfg.keywords.length * cfg.maxPages * 12);
+  const accounts = Math.min(100, cfg.keywords.length * cfg.maxPages * 12);
+  const enrich = cfg.platforms.reduce((n, p) => n + (PLATFORMS[p].enrichCalls?.() ?? (PLATFORMS[p].followers ? 1 : 0)), 0) * accounts;
   return search + enrich;
 }
 
@@ -93,8 +94,27 @@ export async function runTask(taskId: number): Promise<void> {
       }
     }
 
-    // 账号维度：补粉丝数 → 粉丝/互动过滤 → 入库
+    // 账号维度：换出真实账号 → 补粉丝数 → 粉丝/互动过滤 → 入库
     p.stage = "enriching";
+    setProgress(taskId, p);
+    // 搜索结果没有作者稳定 ID 的平台（视频号）：每个临时账号用一条命中作品换出真实账号。
+    // 只对命中的账号做；失败（null）则沿用临时 ID，同一作者的作品仍聚在一起。
+    const resolved = new Map<string, { uid: string; name?: string; url?: string } | null>();
+    for (const { post } of hits.values()) {
+      const resolve = PLATFORMS[post.platform].resolveAccount;
+      const k = `${post.platform}:${post.accountUid}`;
+      if (!resolve || resolved.has(k)) continue;
+      checkCancel();
+      resolved.set(k, await resolve(post, taskId));
+      p.calls = (p.calls ?? 0) + 1;
+    }
+    for (const { post } of hits.values()) {
+      const r = resolved.get(`${post.platform}:${post.accountUid}`); // 先按旧 ID 查，再改写
+      if (!r) continue;
+      post.accountUid = r.uid;
+      if (r.name) post.accountName = r.name;
+      if (r.url !== undefined) post.accountUrl = r.url;
+    }
     setProgress(taskId, p);
     const followers = new Map<string, number | null>();
     for (const { post } of hits.values()) {
@@ -136,8 +156,10 @@ export async function runTask(taskId: number): Promise<void> {
           if (f != null && cfg.followers.min != null && f < cfg.followers.min) continue;
           if (f != null && cfg.followers.max != null && f > cfg.followers.max) continue;
         }
-        if (cfg.engagement?.minLikes != null && post.likes < cfg.engagement.minLikes) continue;
-        if (cfg.engagement?.minComments != null && post.comments < cfg.engagement.minComments) continue;
+        if (!PLATFORMS[post.platform].noEngagement) {
+          if (cfg.engagement?.minLikes != null && post.likes < cfg.engagement.minLikes) continue;
+          if (cfg.engagement?.minComments != null && post.comments < cfg.engagement.minComments) continue;
+        }
         upAcc.run(post.platform, post.accountUid, post.accountName, post.accountUrl, f, now);
         upPost.run(
           post.platform, post.postId, taskId, row.scope, post.accountUid, post.url, post.title, post.publishedAt,

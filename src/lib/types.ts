@@ -1,4 +1,4 @@
-export type Platform = "douyin" | "xiaohongshu" | "kuaishou" | "bilibili";
+export type Platform = "douyin" | "xiaohongshu" | "kuaishou" | "bilibili" | "wechat_channels" | "wechat_mp";
 
 export type TimeRange =
   | { type: "relative"; days: number }
@@ -41,6 +41,10 @@ export type NormPost = {
   accountName: string;
   accountUrl: string;
   followers: number | null; // 搜索结果里没有则为 null，之后补
+  /** 额外参与"是否投放内容"判定的正文片段（如公众号文章摘要）。只在抓取过程中使用，不入库 */
+  text?: string;
+  /** 平台私有的补充引用（如视频号的 exportId，用来换出作者账号）。只在抓取过程中使用，不入库 */
+  ref?: Record<string, string>;
 };
 
 export type SearchPage = {
