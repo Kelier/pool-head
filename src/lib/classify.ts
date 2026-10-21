@@ -19,7 +19,7 @@ export function classify(
   cfg: Pick<TaskConfig, "keywords" | "match">,
   rules: Settings["rules"] = DEFAULT_SETTINGS.rules,
 ): Classification | null {
-  const text = norm([post.title, ...post.hashtags].join(" "));
+  const text = norm([post.title, post.text ?? "", ...post.hashtags].join(" "));
   const hit = cfg.keywords.filter((k) => hits(text, k));
   if (cfg.match === "all" ? hit.length !== cfg.keywords.length : hit.length === 0) return null;
   if (rules.exclude.some((w) => w && text.includes(norm(w)))) return null;

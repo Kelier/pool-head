@@ -108,7 +108,7 @@ export function AccountDrawer({ platform, uid, onClose, onChanged }: { platform:
             {data!.posts.map((p) => (
               <div key={p.postId + p.scope} className={`post ${p.verdict === "rejected" ? "rej" : ""}`}>
                 <div style={{ minWidth: 0 }}>
-                  <a className="t" href={p.url} target="_blank" rel="noreferrer">{p.title || p.url}</a>
+                  {p.url ? <a className="t" href={p.url} target="_blank" rel="noreferrer">{p.title || p.url}</a> : <span className="t">{p.title || "（无标题）"}</span>}
                   <div className="m" style={{ marginTop: 4 }}>
                     <span className="num">{fmtDateTime(p.publishedAt)}</span>
                     <span className="num">赞 {fmtNum(p.likes)} · 评 {fmtNum(p.comments)}</span>

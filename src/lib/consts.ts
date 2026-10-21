@@ -1,5 +1,5 @@
 // 客户端安全的常量（不要在这里 import 任何服务端模块）
-export const PLATFORM_NAME: Record<string, string> = { douyin: "抖音", xiaohongshu: "小红书", kuaishou: "快手", bilibili: "B站" };
+export const PLATFORM_NAME: Record<string, string> = { douyin: "抖音", xiaohongshu: "小红书", kuaishou: "快手", bilibili: "B站", wechat_channels: "视频号", wechat_mp: "公众号" };
 export const PLATFORM_LIST = Object.entries(PLATFORM_NAME).map(([id, name]) => ({ id, name }));
 export const TIER_LABEL: Record<string, string> = { head: "头部", waist: "腰部", tail: "尾部", micro: "素人", unknown: "未知" };
 export const TIER_COLOR: Record<string, string> = { head: "#ff4d4d", waist: "#f5b83d", tail: "#2fd4a0", micro: "#579df8", unknown: "#8a8f98" };
