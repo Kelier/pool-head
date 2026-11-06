@@ -55,3 +55,11 @@ it("本机管理员可显式在生产模式启用，重置后旧凭证失效", a
   const production = await POST(formRequest({ username: "local-admin", password: NEW_PASSWORD }));
   expect(production.cookies.get(LOCAL_ADMIN_COOKIE)?.value).toBeTruthy();
 });
+
+
+it("没有登录模式环境变量时默认转到本机管理员入口", async () => {
+  vi.stubEnv("WEB_AUTH_MODE", undefined);
+  const login = await middleware(new NextRequest(ORIGIN + "/login"));
+  expect(login.headers.get("location")).toBe(ORIGIN + "/local-admin");
+  expect((await middleware(new NextRequest(ORIGIN + "/api/auth/login"))).status).toBe(404);
+});

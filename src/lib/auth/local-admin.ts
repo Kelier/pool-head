@@ -10,9 +10,10 @@ export const LOCAL_ADMIN_SECONDS = 7 * 24 * 60 * 60;
 const scryptAsync = promisify(scrypt);
 const LOOPBACK = new Set(["localhost", "127.0.0.1", "::1", "[::1]", "::ffff:127.0.0.1"]);
 
-/** 选择仅使用本机 SQLite 管理员的登录模式。 */
+/** 新安装默认使用本机管理员，保留显式配置的登录方式。 */
 export function localAdminOnly(): boolean {
-  return process.env.WEB_AUTH_MODE === "local_admin";
+  const mode = process.env.WEB_AUTH_MODE;
+  return !mode || mode === "local_admin";
 }
 
 /** 管理员模式支持本机生产启动，旧开关仍仅用于开发环境。 */
