@@ -18,6 +18,7 @@ type CompRow = Summary & {
 };
 type TaskRow = { id: number; name: string | null; status: string; source: string; competitorName: string | null; competitorColor: string | null; createdAt: number; progress: { accounts?: number; newAccounts?: number }; config: { keywords: string[]; platforms: string[] } };
 type Overview = {
+  budget: { configured: boolean };
   totals: Summary & { competitors: number; tasks: number };
   perCompetitor: CompRow[];
   trend: { weeks: number[]; series: Record<string, number[]>; competitors: Array<{ id: number; name: string; color: string; key: string }> };
@@ -59,6 +60,7 @@ export default function OverviewPage() {
   return (
     <>
       <PageHead title="总览" sub="竞品投放账号动态：谁在投、投了多少、哪些账号被反复投放" actions={actions} />
+      {!data.budget.configured && <div className="alert">尚未配置 TikHub API Key。可以查看已有数据，配置后即可发起抓取。</div>}
 
       {empty ? (
         <div className="card">

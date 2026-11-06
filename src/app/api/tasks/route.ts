@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { TIKHUB_KEY_REQUIRED } from "@/lib/tikhub/client";
 import { createTask, estimateCalls, budgetStatus } from "@/lib/pipeline";
 import { getCompetitor, listTasks } from "@/lib/queries";
 import { parseTaskConfig } from "@/lib/validate";
@@ -34,8 +35,9 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: (e as Error).message }, { status: 400 });
   }
   const estimate = estimateCalls(cfg);
-  const { used, limit } = budgetStatus();
-  if (used + estimate > limit) return NextResponse.json({ error: `预估 ${estimate} 次调用，今日已用 ${used}/${limit}，超出预算`, estimate }, { status: 429 });
+  const { used, limit, configured } = budgetStatus();
+  if (!configured) return NextResponse.json({ error: TIKHUB_KEY_REQUIRED }, { status: 503 });
+  if (cfg.maxPages == null ? used >= limit : used + estimate > limit) return NextResponse.json({ error: `预估 ${estimate} 次调用，今日已用 ${used}/${limit}，超出预算`, estimate }, { status: 429 });
   const name = body.name || comp?.name || cfg.keywords.slice(0, 3).join("、");
   return NextResponse.json({ id: createTask(cfg, { competitorId, name }), estimate }, { status: 201 });
 }

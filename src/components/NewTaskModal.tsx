@@ -1,5 +1,6 @@
 "use client";
 import { useState } from "react";
+import { estimateSearchPages, MAX_SEARCH_PAGES } from "@/lib/search-pages";
 import { PLATFORM_LIST } from "@/lib/consts";
 import { api } from "@/lib/useApi";
 import { Modal, Seg } from "./ui";
@@ -17,7 +18,7 @@ export function NewTaskModal({ preset, onClose, onCreated }: { preset?: Preset; 
   const [days, setDays] = useState(30);
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
-  const [maxPages, setMaxPages] = useState(3);
+  const [pageOverride, setPageOverride] = useState<number | null>(null);
   const [fMin, setFMin] = useState("");
   const [fMax, setFMax] = useState("");
   const [minLikes, setMinLikes] = useState("");
@@ -25,15 +26,17 @@ export function NewTaskModal({ preset, onClose, onCreated }: { preset?: Preset; 
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
 
-  const kws = keywords.split(/[\n,，]/).map((s) => s.trim()).filter(Boolean);
-  const estimate = platforms.length * kws.length * maxPages + platforms.filter((p) => NEEDS_ENRICH.has(p)).length * Math.min(100, kws.length * maxPages * 12);
+  const kws = [...new Set(keywords.split(/[\n,，]/).map((s) => s.trim()).filter(Boolean))];
+  const estimatePages = pageOverride ?? estimateSearchPages(platforms.length, kws.length);
+  const searchEstimate = platforms.length * kws.length * estimatePages;
+  const estimate = searchEstimate + platforms.filter((p) => NEEDS_ENRICH.has(p)).length * Math.min(100, kws.length * estimatePages * 12);
 
   async function submit() {
     setErr("");
     setBusy(true);
     try {
       const r = await api<{ id: number }>("/api/tasks", "POST", {
-        competitorId: preset?.competitorId, name: preset?.name, platforms, keywords: kws, match, maxPages,
+        competitorId: preset?.competitorId, name: preset?.name, platforms, keywords: kws, match, maxPages: pageOverride,
         time: mode === "relative" ? { type: "relative", days } : { type: "absolute", from, to },
         followers: fMin || fMax ? { min: fMin, max: fMax } : undefined,
         engagement: minLikes || minComments ? { minLikes, minComments } : undefined,
@@ -52,7 +55,7 @@ export function NewTaskModal({ preset, onClose, onCreated }: { preset?: Preset; 
       onClose={onClose}
       footer={
         <>
-          <span className="hint" style={{ marginRight: "auto", alignSelf: "center" }}>预估约 {estimate} 次 API 调用（缓存命中不计）</span>
+          <span className="hint" style={{ marginRight: "auto", alignSelf: "center" }}>{pageOverride === null ? "自动翻页" : `搜索最多 ${searchEstimate} 次`}，含补资料预算参考约 {estimate} 次</span>
           <button className="btn ghost" onClick={onClose}>取消</button>
           <button className="btn" onClick={submit} disabled={busy || !kws.length || !platforms.length || (mode === "absolute" && (!from || !to))}>{busy ? "创建中…" : "开始抓取"}</button>
         </>
@@ -92,8 +95,8 @@ export function NewTaskModal({ preset, onClose, onCreated }: { preset?: Preset; 
           <div className="field"><label>评论下限</label><input type="number" value={minComments} onChange={(e) => setMinComments(e.target.value)} /></div>
         </div>
         <div className="field">
-          <label>每个关键词最多翻页数（影响调用量）</label>
-          <input type="number" min={1} max={10} value={maxPages} onChange={(e) => setMaxPages(Math.min(10, Math.max(1, +e.target.value || 1)))} />
+          <label>每个平台 × 关键词的页数限制（留空自动翻页）</label>
+          <input type="number" min={1} max={MAX_SEARCH_PAGES} placeholder="自动" value={pageOverride ?? ""} onChange={(e) => setPageOverride(e.target.value ? Math.min(MAX_SEARCH_PAGES, Math.max(1, Math.floor(Number(e.target.value)))) : null)} />
         </div>
       </details>
       {err && <div className="alert">{err}</div>}

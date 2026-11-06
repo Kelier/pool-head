@@ -43,7 +43,6 @@ DB_FILE=/tmp/demo.db pnpm dev
 | 变量 | 默认 | 说明 |
 |---|---|---|
 | `TIKHUB_API_KEY` | —（必填） | TikHub API Key，仅服务端使用，不会出现在页面或接口响应里 |
-| `TIKHUB_BASE_URL` | `https://api.tikhub.io` | API 地址 |
 | `TIKHUB_GLOBAL_QPS` | `3` | 全局限速（请求/秒）。官方上限 10，代码里硬顶 8 |
 | `TIKHUB_PLATFORM_CONCURRENCY` | `2` | 单平台最大并发 |
 | `TIKHUB_DAILY_BUDGET_CALLS` | `5000` | 每日真实调用预算（缓存命中不计）；用完后拒绝新请求 |
@@ -51,6 +50,8 @@ DB_FILE=/tmp/demo.db pnpm dev
 | `TIKHUB_MAX_RETRIES` | `3` | 最大重试次数（上限 3） |
 | `TIKHUB_PROXY` | 空 | HTTP 代理，如 `http://127.0.0.1:7890`。本机 DNS / VPN 导致 `fetch failed` 时设置 |
 | `DB_FILE` | `data/gtm.db` | SQLite 文件路径 |
+
+TikHub API 固定使用 `https://api.tikhub.io`，旧的 `TIKHUB_BASE_URL` 环境变量已失效。
 
 修改 `.env` 后需重启服务。`.env` 已在 `.gitignore` 中，**不要提交**。
 
@@ -115,6 +116,8 @@ TikHub 已承担对各平台的反爬对抗；本项目负责不触顶限流、�
 | 翻页止损 | 按最新排序，整页早于时间范围起点即停止 |
 | 日志 | 每次调用记录 endpoint / 状态 / 耗时 / 是否命中缓存（不记录密钥） |
 
+新建任务默认自动翻页，100 次搜索仅作为预算参考。平台没有下一页、返回已使用的游标、重复整页作品或整页早于日期范围时停止翻页。网页可按需为各组指定页数。
+
 预估调用量 = 平台数 × 关键词数 × 翻页数 + 补资料调用（小红书 / 快手 / B站每个命中账号 1 次；**视频号每个命中账号 2 次**：换账号 + 补粉丝；公众号 0 次；抖音搜索结果自带粉丝数）。
 
 ## 测试
@@ -138,13 +141,45 @@ pnpm smoke 关键词   # 真实调用 TikHub 的端到端冒烟，会少量计�
 - 无登录 / 权限体系，本地单用户。
 - 定时监控为进程内调度：服务没运行就不会触发，也不会补跑。
 
+## 飞书网页登录
+
+1. 在 Supabase 项目执行 [账号与会话建表 SQL](supabase/migrations/20261106000000_web_auth.sql)，启用 Data API。在 Web 服务环境配置 `SUPABASE_URL` 和服务端专用的 `SUPABASE_SECRET_KEY`。
+2. 使用飞书企业自建应用，配置应用的可用范围并发布。把 `APP_PUBLIC_URL` 设置为用户访问的固定站点地址，并在飞书应用的安全设置登记完整回调地址，例如 `https://monitor.example.com/api/auth/callback`。本地联调使用与实际端口匹配的回调地址。
+3. 配置 `FEISHU_APP_ID` 与 `FEISHU_APP_SECRET`。可用 `FEISHU_WEB_TENANT_KEY` 额外限制组织。已通过飞书验证的用户首次登录时自动建档，共用同一控制台和业务数据。
+4. 长连接机器人和 Web 服务配置相同的 `BOT_BACKEND_SECRET`（可用 `openssl rand -hex 32` 生成）。机器人凭此密钥调用竞品抓取 API。Webhook 继续使用飞书事件验证令牌。
+
+## Hogi HOE 测试账号登录
+
+1. 配置 `WEB_AUTH_MODE=hoe`、`HOE_SUPABASE_URL` 和 `HOE_SUPABASE_ANON_KEY`。使用 HOE 的客户端 key，无需 service role。登录邮箱以 HOE Auth 中的实际邮箱为准。
+2. 由有权限的 HOE 管理员执行 [访问名单建表 SQL](supabase/migrations/20261106000100_hoe_access.sql)，再为需要访问的用户写入一行。UUID 来自 HOE 的 `auth.users.id`。
+   ```sql
+   insert into public.pool_head_web_access (user_id)
+   values ('替换为已授权的 HOE 用户 UUID'::uuid)
+   on conflict do nothing;
+   ```
+3. 默认通过 `https://api-hoe-qc.hogi.ai` 获取腾讯验证码配置并登录（可用 `HOE_HOGI_API_URL` 指定 HOE API）。重启后从本地登录页使用现有账号。删除访问名单中的对应行即可撤销访问，抓取业务仍使用本地 SQLite。
+
+### HOE 登录后由飞书审批
+
+配置 `WEB_AUTH_MODE=hoe_approval`，并保留 HOE 认证配置。使用具有机器人私信权限的飞书自建应用，填写 `FEISHU_APP_ID` 和 `FEISHU_APP_SECRET`，并登记 `APP_PUBLIC_URL` 下的 `/api/auth/callback`。审批人需要能在飞书里访问该站点地址；跨设备时使用可达的 HTTPS 地址。
+
+在服务启动、SQLite 自动建表后，由管理员在 `DB_FILE` 对应的本地库中登记 HOE UUID 和同一飞书应用下的用户 `open_id`：
+
+```sql
+INSERT INTO hoe_approval_members (user_id, feishu_app_id, feishu_open_id)
+VALUES ('HOE 用户 UUID', 'cli_应用 ID', 'ou_用户 Open ID');
+```
+
+也可在 `HOE_APPROVAL_AUTO_BIND_EMAILS` 填写获准自动绑定的 HOE 邮箱（逗号分隔）。登录后用 HOE 返回的已验证邮箱精确查找飞书通讯录，唯一匹配时写入绑定。飞书应用需开通应用身份权限 `contact:user.id:readonly`，且用户在通讯录可见范围内。
+
+登录后在飞书私信完成身份授权，回原浏览器点击「我已授权，继续登录」。审批有效 10 分钟、仅可兑换一次。删除绑定会立即撤销该用户在本站的访问。此模式使用本地 SQLite 保存访问名单和会话。
+
+### 本机备用管理员
+
+在 `.env.local` 设置 `LOCAL_ADMIN_ENABLED=1`，用 `pnpm dev --hostname 127.0.0.1 --port 3111` 启动。运行 `node --env-file=.env.local --import tsx scripts/local-admin.ts` 创建或恢复备用凭证，终端会显示生成的密码。登录入口为 `http://localhost:3111/local-admin`，登录后可在 `/local-admin/reset` 重置。每次生成或重置后有效期为 7 天，旧密码及会话立即失效。
+
 ## 上线注意
 
-当前为本地版，尚未部署。上线前需要：
+推荐先在带持久卷的常驻 Node.js 22.13+ 服务上运行 Web 和抓取进程，Supabase 单独保存网页登录账号和会话。业务 SQLite 放在持久卷，通过 `DB_FILE` 指定绝对路径。
 
-1. 存储从本地 SQLite 换成 Postgres：只需替换 `src/lib/db.ts` 与 `src/lib/queries.ts` 的 SQL。
-2. 任务执行从进程内改为队列 / Workflow（`pipeline.ts` 里的 `createTask`），否则 Serverless 实例回收会中断任务。
-3. 定时监控改用 Cron 触发 `runDueSchedules`（`src/lib/scheduler.ts`）。
-4. 限流 / 熔断 / 预算计数改为跨实例共享（Redis 或数据库），进程内计数器在多实例下不准。
-5. 在部署平台的环境变量里配置 `TIKHUB_API_KEY`（Production / Preview 分开），并加上访问控制。
-6. 轮换曾经暴露过的 Key。
+Netlify 支持 Next.js 页面和 API，但完整项目迁移还需要处理业务 SQLite、进程内抓取、定时监控和长连接机器人。若要让业务 API 也运行在 Netlify，需要把业务数据迁往共享数据库，抓取迁到持久任务队列和 Worker，定时任务改由 Cron 触发，并在多实例间共享限流、熔断和预算状态。

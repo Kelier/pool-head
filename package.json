@@ -13,6 +13,8 @@
   },
   "dependencies": {
     "@larksuiteoapi/node-sdk": "^1.75.0",
+    "@supabase/ssr": "^0.7.0",
+    "@supabase/supabase-js": "2.57.4",
     "exceljs": "^4.4.0",
     "next": "^15.5.0",
     "react": "^19.0.0",

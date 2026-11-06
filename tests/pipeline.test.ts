@@ -8,10 +8,15 @@ process.env.TIKHUB_API_KEY = "test-key";
 process.env.TIKHUB_GLOBAL_QPS = "8";
 
 import { db } from "../src/lib/db";
+import { BudgetExceededError } from "../src/lib/tikhub/client";
 import { runTask, createTask } from "../src/lib/pipeline";
 import { saveCompetitor, accountRows, getTask } from "../src/lib/queries";
+import { parseTaskConfig } from "../src/lib/validate";
+import { PLATFORMS } from "../src/lib/platforms";
+import { parseDouyinSearch } from "../src/lib/platforms/douyin";
 import { listAlerts } from "../src/lib/alerts";
 
+const DAY_MS = 86_400_000;
 const dy = readFileSync("tests/fixtures/douyin_search.json", "utf8");
 let calls = 0;
 
@@ -26,7 +31,7 @@ beforeAll(() => {
 
 const cfg = { platforms: ["douyin"], keywords: ["libtv"], match: "any", time: { type: "relative", days: 365 }, repeatThreshold: 2, maxPages: 1, minConfidence: 0.5 };
 
-function newTask(competitorId: number | null, config = cfg) {
+function newTask(competitorId: number | null, config: Omit<typeof cfg, "maxPages"> & { maxPages?: number } = cfg) {
   const r = db().prepare("INSERT INTO tasks(config, created_at, competitor_id, name, scope) VALUES (?,?,?,?,?)").run(JSON.stringify(config), Date.now(), competitorId, "T", "");
   const id = Number(r.lastInsertRowid);
   db().prepare("UPDATE tasks SET scope=? WHERE id=?").run(competitorId ? `c${competitorId}` : `t${id}`, id);
@@ -84,4 +89,88 @@ describe("runTask", () => {
     await new Promise((r) => setTimeout(r, 800));
     expect(["done", "running"]).toContain(getTask(id)!.status);
   });
+});
+
+it("未配置 TikHub 密钥时总览和任务列表仍可读，启动抓取返回配置错误", async () => {
+  vi.stubEnv("TIKHUB_API_KEY", "");
+  try {
+    const { GET: overview } = await import("../src/app/api/overview/route");
+    const { GET: tasks, POST: start } = await import("../src/app/api/tasks/route");
+    const { GET: settings } = await import("../src/app/api/settings/route");
+    const homepage = await overview();
+    expect(homepage.status).toBe(200);
+    expect(await homepage.json()).toMatchObject({ budget: { configured: false } });
+    const listing = await tasks(new Request("http://localhost/api/tasks"));
+    expect(listing.status).toBe(200);
+    expect(await listing.json()).toMatchObject({ budget: { configured: false } });
+    expect((await settings()).status).toBe(200);
+
+    const response = await start(new Request("http://localhost/api/tasks", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(cfg),
+    }));
+    expect(response.status).toBe(503);
+    expect(await response.json()).toMatchObject({ error: expect.stringContaining("TIKHUB_API_KEY") });
+  } finally {
+    vi.unstubAllEnvs();
+  }
+});
+
+it("默认自动翻页，仍接受旧的显式页数", () => {
+  const { maxPages: _maxPages, ...base } = cfg;
+  expect(parseTaskConfig(base).maxPages).toBeUndefined();
+  expect(parseTaskConfig({ ...base, maxPages: null }).maxPages).toBeUndefined();
+  expect(parseTaskConfig(cfg).maxPages).toBe(1);
+  expect(parseTaskConfig({ ...cfg, maxPages: 150 }).maxPages).toBe(150);
+  expect(() => parseTaskConfig({ ...cfg, maxPages: 0 })).toThrow();
+});
+
+it("同一页混有过期作品时继续翻页，整页过期时结束", async () => {
+  const sample = parseDouyinSearch(JSON.parse(dy)).posts[0];
+  const recent = { ...sample, publishedAt: Date.now() - 1000 };
+  const older = { ...sample, publishedAt: Date.now() - 2 * DAY_MS };
+  const search = vi.spyOn(PLATFORMS.douyin, "search")
+    .mockResolvedValueOnce({ posts: [recent, older], hasMore: true, next: { cursor: 1 } })
+    .mockResolvedValueOnce({ posts: [older], hasMore: true, next: { cursor: 2 } });
+  try {
+    const id = newTask(null, { ...cfg, maxPages: 3, time: { type: "relative", days: 1 } });
+    await runTask(id);
+    expect(search).toHaveBeenCalledTimes(2);
+    expect(getTask(id)?.progress.postsSeen).toBe(3);
+  } finally {
+    search.mockRestore();
+  }
+});
+
+it("自动翻页可超过 100 次，并在循环游标再次出现时停止", async () => {
+  let page = 0;
+  const search = vi.spyOn(PLATFORMS.douyin, "search").mockImplementation(async () => {
+    page++;
+    return { posts: [], hasMore: true, next: { cursor: page <= 100 ? page : 1 } };
+  });
+  try {
+    const id = newTask(null, { ...cfg, maxPages: undefined });
+    await runTask(id);
+    expect(search).toHaveBeenCalledTimes(101);
+    expect(getTask(id)?.status).toBe("done");
+  } finally {
+    search.mockRestore();
+  }
+});
+
+it("预算耗尽时保存已命中的作品并暂停任务", async () => {
+  const sample = parseDouyinSearch(JSON.parse(dy)).posts[0];
+  const post = { ...sample, title: "libtv 合作投放", publishedAt: Date.now() - 1000 };
+  const search = vi.spyOn(PLATFORMS.douyin, "search")
+    .mockResolvedValueOnce({ posts: [post], hasMore: true, next: { cursor: 1 } })
+    .mockRejectedValueOnce(new BudgetExceededError(5000, 5000));
+  try {
+    const id = newTask(null, { ...cfg, maxPages: undefined, minConfidence: 0 });
+    await runTask(id);
+    expect(getTask(id)?.status).toBe("paused_budget");
+    expect(accountRows({ taskId: id })).toHaveLength(1);
+  } finally {
+    search.mockRestore();
+  }
 });

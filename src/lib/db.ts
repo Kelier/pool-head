@@ -118,6 +118,35 @@ function migrate(d: DatabaseSync) {
       key TEXT PRIMARY KEY,
       value TEXT NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS local_admin (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      password_hash TEXT NOT NULL,
+      session_hash TEXT,
+      expires_at INTEGER NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS hoe_approval_members (
+      user_id TEXT PRIMARY KEY,
+      feishu_app_id TEXT NOT NULL,
+      feishu_open_id TEXT NOT NULL,
+      UNIQUE (feishu_app_id, feishu_open_id)
+    );
+    CREATE TABLE IF NOT EXISTS hoe_login_approvals (
+      browser_hash TEXT PRIMARY KEY,
+      approval_hash TEXT NOT NULL UNIQUE,
+      user_id TEXT NOT NULL,
+      app_id TEXT NOT NULL,
+      open_id TEXT NOT NULL,
+      next_path TEXT NOT NULL,
+      expires_at INTEGER NOT NULL,
+      approved_at INTEGER
+    );
+    CREATE TABLE IF NOT EXISTS hoe_login_sessions (
+      token_hash TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      app_id TEXT NOT NULL,
+      open_id TEXT NOT NULL,
+      expires_at INTEGER NOT NULL
+    );
     CREATE TABLE IF NOT EXISTS bot_subs (
       chat_id TEXT PRIMARY KEY,
       created_at INTEGER NOT NULL

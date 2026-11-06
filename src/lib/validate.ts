@@ -1,3 +1,5 @@
+import { MAX_SEARCH_PAGES } from "./search-pages";
+import { isValidDateRange } from "./dates";
 import { DEFAULT_CONFIG, type Platform, type TaskConfig } from "./types";
 import { PLATFORM_IDS } from "./platforms";
 
@@ -14,7 +16,7 @@ export function parseTaskConfig(raw: any): TaskConfig { // eslint-disable-line @
   const t = raw?.time;
   let time: TaskConfig["time"];
   if (t?.type === "absolute") {
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(t.from) || !/^\d{4}-\d{2}-\d{2}$/.test(t.to) || t.from > t.to) throw new Error("绝对时间范围不合法");
+    if (!isValidDateRange(t.from, t.to)) throw new Error("绝对时间范围不合法");
     time = { type: "absolute", from: t.from, to: t.to };
   } else {
     const days = Number(t?.days ?? 30);
@@ -35,7 +37,7 @@ export function parseTaskConfig(raw: any): TaskConfig { // eslint-disable-line @
     followers: raw?.followers ? { min: opt(raw.followers.min), max: opt(raw.followers.max) } : undefined,
     engagement: raw?.engagement ? { minLikes: opt(raw.engagement.minLikes), minComments: opt(raw.engagement.minComments) } : undefined,
     repeatThreshold: int(raw?.repeatThreshold, DEFAULT_CONFIG.repeatThreshold, 2, 50),
-    maxPages: int(raw?.maxPages, DEFAULT_CONFIG.maxPages, 1, 10),
+    maxPages: raw?.maxPages == null || raw.maxPages === "" ? undefined : Math.floor(int(raw.maxPages, 1, 1, MAX_SEARCH_PAGES)),
     minConfidence: int(raw?.minConfidence, DEFAULT_CONFIG.minConfidence, 0, 1),
   };
 }

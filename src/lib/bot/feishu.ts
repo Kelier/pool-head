@@ -44,6 +44,27 @@ export class FeishuClient implements Sender {
     return this.call(path, { method: "POST", headers: { "Content-Type": "application/json" }, body });
   }
 
+  /** 通过通讯录精确查找同一飞书应用下的唯一用户。 */
+  async findOpenIdByEmail(email: string): Promise<string | undefined> {
+    const result = await this.call("/contact/v3/users/batch_get_id?user_id_type=open_id", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ emails: [email] }),
+    });
+    const users: Array<{ user_id?: unknown }> = Array.isArray(result.data?.user_list) ? result.data.user_list : [];
+    const ids = [...new Set(users.map((user) => user.user_id).filter((id): id is string => typeof id === "string" && /^ou_[A-Za-z0-9]+$/.test(id)))];
+    return ids.length === 1 ? ids[0] : undefined;
+  }
+
+  /** 按同一飞书应用下的 open_id 发送审批私信。 */
+  async directText(openId: string, text: string): Promise<void> {
+    await this.call("/im/v1/messages?receive_id_type=open_id", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ receive_id: openId, msg_type: "text", content: JSON.stringify({ text }) }),
+    });
+  }
+
   async text(chatId: string, text: string, replyTo?: string) { await this.send(chatId, "text", { text }, replyTo); }
   async card(chatId: string, card: Card, replyTo?: string): Promise<string | void> {
     const j = await this.send(chatId, "interactive", card, replyTo);

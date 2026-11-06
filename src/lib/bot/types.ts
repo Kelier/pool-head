@@ -1,4 +1,6 @@
 // 与传输层无关的机器人内核类型。飞书只是其中一个入口，换成企微/钉钉/Slack 只需实现 Sender + 事件适配。
+import type { AbsoluteTimeRange } from "../types";
+
 export type Role = "admin" | "member" | "none";
 export type Card = Record<string, unknown>;
 
@@ -18,7 +20,7 @@ export interface Progress {
 
 /** 会触发 TikHub 计费的写操作统一走 Backend，保证全局只有一个进程在限速（见 docs/FEISHU_BOT.md）。 */
 export interface BotBackend {
-  runCompetitor(competitorId: number, days: number): Promise<{ id: number; estimate: number }>;
+  runCompetitor(competitorId: number, days: number, absolute?: AbsoluteTimeRange): Promise<{ id: number; estimate: number }>;
 }
 
 export type BotCtx = {

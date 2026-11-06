@@ -156,7 +156,7 @@ export default function TaskDetailPage() {
                   </>
                 )}
               </dd>
-              <dt>判定口径</dt><dd>复投阈值 ≥ {cfg.repeatThreshold} 次 · 最低置信度 {cfg.minConfidence} · 每词最多 {cfg.maxPages} 页</dd>
+              <dt>判定口径</dt><dd>复投阈值 ≥ {cfg.repeatThreshold} 次 · 最低置信度 {cfg.minConfidence} · {cfg.maxPages ? `每组最多 ${cfg.maxPages} 页` : "自动翻页"}</dd>
             </dl>
           </section>
 

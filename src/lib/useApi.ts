@@ -15,9 +15,11 @@ export function useApi<T>(url: string | null, poll?: (d: T | null) => number | f
     const my = ++seq.current;
     try {
       const r = await fetch(url, { cache: "no-store" });
-      const j = await r.json();
+      const j = await r.json().catch(() => {
+        throw new Error(r.ok ? "接口未返回有效数据" : `请求失败（HTTP ${r.status}）`);
+      });
       if (my !== seq.current) return null;
-      if (!r.ok) throw new Error(j.error ?? `HTTP ${r.status}`);
+      if (!r.ok) throw new Error(j?.error ?? `HTTP ${r.status}`);
       setData(j as T);
       setError(null);
       return j as T;
@@ -49,7 +51,7 @@ export function useApi<T>(url: string | null, poll?: (d: T | null) => number | f
 export async function api<T = unknown>(url: string, method = "GET", body?: unknown): Promise<T> {
   const r = await fetch(url, { method, headers: body ? { "Content-Type": "application/json" } : undefined, body: body ? JSON.stringify(body) : undefined });
   const j = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(j.error ?? `HTTP ${r.status}`);
+  if (!r.ok) throw new Error(j?.error ?? `HTTP ${r.status}`);
   return j as T;
 }
 

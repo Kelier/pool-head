@@ -5,6 +5,7 @@ import { useState } from "react";
 import type { AccountRow } from "@/lib/queries";
 import { PLATFORM_LIST, PLATFORM_NAME, SOURCE_LABEL, TIER_LABEL } from "@/lib/consts";
 import { fmtDateTime, fmtPct, qs, relTime } from "@/lib/format";
+import { MAX_SEARCH_PAGES } from "@/lib/search-pages";
 import { api, toast, useApi } from "@/lib/useApi";
 import { Badge, Empty, Icon, Kpi, PageHead, Pager, Seg, Skeleton, StatusBadge, Swatch } from "@/components/ui";
 import { LineChart } from "@/components/charts";
@@ -176,7 +177,7 @@ export default function CompetitorDetailPage() {
 function ScheduleCard({ competitorId, schedule, onChanged }: { competitorId: number; schedule: ScheduleRow | null; onChanged: () => void }) {
   const [interval, setIntervalDays] = useState(schedule?.interval_days ?? 7);
   const [windowDays, setWindowDays] = useState(schedule?.window_days ?? 30);
-  const [maxPages, setMaxPages] = useState(schedule?.max_pages ?? 3);
+  const [maxPages, setMaxPages] = useState<number | null>(schedule?.max_pages || null);
   const [editing, setEditing] = useState(false);
   const [busy, setBusy] = useState(false);
 
@@ -199,8 +200,8 @@ function ScheduleCard({ competitorId, schedule, onChanged }: { competitorId: num
         </div>
       </div>
       <div className="field" style={{ marginBottom: 0 }}>
-        <label>每个关键词翻页数（影响 API 调用量）</label>
-        <input type="number" min={1} max={10} value={maxPages} onChange={(e) => setMaxPages(Math.min(10, Math.max(1, +e.target.value || 1)))} />
+        <label>每个平台 × 关键词的页数限制（留空自动翻页）</label>
+        <input type="number" min={1} max={MAX_SEARCH_PAGES} placeholder="自动" value={maxPages ?? ""} onChange={(e) => setMaxPages(e.target.value ? Math.min(MAX_SEARCH_PAGES, Math.max(1, Math.floor(Number(e.target.value)))) : null)} />
       </div>
       <div style={{ display: "flex", gap: 8 }}>
         <button className="btn sm" disabled={busy} onClick={save}>{schedule ? "保存修改" : "开启定时监控"}</button>
