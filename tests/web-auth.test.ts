@@ -15,6 +15,7 @@ function request(path: string, cookie?: [string, string]) {
 }
 
 beforeEach(() => {
+  vi.stubEnv("WEB_AUTH_MODE", "feishu");
   vi.stubEnv("APP_PUBLIC_URL", APP_ORIGIN);
   vi.stubEnv("FEISHU_APP_ID", "cli_test");
   vi.stubEnv("FEISHU_APP_SECRET", "test-secret");
