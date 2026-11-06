@@ -464,7 +464,7 @@ BOT_LLM_DAILY_CAP=200
 
 先在本机终端确认 `npr <GitHub PR 链接>` 会用预期的 GitHub 账号提交 APPROVE，并能在无交互模式下运行。然后在 `.env` 中配置：
 
-- `FEISHU_NPR_EXECUTABLE` 填写 npr 可执行文件的绝对路径。如果 npr 是 shell 别名或函数，请先封装成可执行脚本。
+- `FEISHU_NPR_EXECUTABLE` 填写 npr 的绝对路径。Windows 上使用 npm 安装时可填写 `C:/Users/你的用户名/AppData/Roaming/npm/npr.cmd`。如果 npr 是 shell 别名或函数，请先封装成可执行脚本。
 - `FEISHU_NPR_OPEN_IDS` 填写允许审批的飞书用户 open_id，逗号分隔。用户也需要有机器人访问权限。
 - `FEISHU_NPR_REPOS` 填写允许审批的 `owner/repo`，逗号分隔。
 
