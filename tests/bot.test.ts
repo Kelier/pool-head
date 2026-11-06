@@ -159,6 +159,11 @@ describe("事件处理与权限", () => {
     expect(nprRunner).toHaveBeenCalledWith("/usr/local/bin/npr", url);
     expect(llmFetch).not.toHaveBeenCalled();
     expect(sent.at(-1)?.payload).toContain("npr 执行成功");
+
+    nprRunner.mockRejectedValueOnce(Object.assign(new Error("private command output"), { code: 1 }));
+    await handleMessageEvent(msg(`npr ${url}`), eventDeps);
+    expect(sent.at(-1)?.payload).toContain("退出码 1");
+    expect(sent.at(-1)?.payload).not.toContain("private command output");
   });
 
   it("默认拒绝：未授权用户收到自己的 open_id 指引，且不会执行指令", async () => {
