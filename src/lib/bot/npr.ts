@@ -6,24 +6,26 @@ const EXEC_FILE = promisify(execFile);
 const PR_URL = /^https:\/\/github\.com\/([a-z0-9-]+\/[a-z0-9_.-]+)\/pull\/([1-9][0-9]*)$/i;
 
 type Env = Record<string, string | undefined>;
-export type NprRunner = (executable: string, prUrl: string) => Promise<void>;
+export type NprRunner = (executable: string, prUrls: string[]) => Promise<void>;
 
 /** 执行本机配置的工具，Windows 批处理入口交给系统 cmd。 */
-export async function runLocalNpr(executable: string, prUrl: string): Promise<void> {
+export async function runLocalNpr(executable: string, prUrls: string[]): Promise<void> {
   const options = { timeout: 60_000, maxBuffer: 128 * 1024, windowsHide: true };
+  const args = ["list", ...prUrls];
   if (process.platform === "win32" && /\.(cmd|bat)$/i.test(executable)) {
     // cmd 会展开变量，即使路径有引号也需要拒绝这些字符。
-    if (!win32.isAbsolute(executable) || /[%!"\r\n\0]/.test(executable) || !PR_URL.test(prUrl)) {
+    if (!win32.isAbsolute(executable) || /[%!"\r\n\0]/.test(executable) || prUrls.some((url) => !PR_URL.test(url))) {
       throw Object.assign(new Error("Windows 批处理路径或 PR 链接无效"), { code: "NPR_INVALID_BATCH_ARGUMENT" });
     }
     const cmd = win32.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "cmd.exe");
-    await EXEC_FILE(cmd, ["/d", "/v:off", "/s", "/c", `""${executable}" "${prUrl}""`], {
+    const command = [executable, ...args].map((arg) => `"${arg}"`).join(" ");
+    await EXEC_FILE(cmd, ["/d", "/v:off", "/s", "/c", `"${command}"`], {
       ...options,
       windowsVerbatimArguments: true,
     });
     return;
   }
-  await EXEC_FILE(executable, [prUrl], options);
+  await EXEC_FILE(executable, args, options);
 }
 
 /** 只返回安全的错误分类，避免把子进程的输出转发到飞书。 */
@@ -50,19 +52,28 @@ export async function handleNpr(
   if (!isPrivate || !env.FEISHU_NPR_OPEN_IDS?.split(/[,\s]+/).includes(userId)) {
     return "PR 审批仅限获授权的用户私聊机器人使用。";
   }
-  const match = PR_URL.exec(text.replace(/^npr\s+/i, ""));
-  if (!match) return "用法：npr https://github.com/OWNER/REPO/pull/123";
-  const [, repo, number] = match;
-  if (!env.FEISHU_NPR_REPOS?.toLowerCase().split(/[,\s]+/).includes(repo.toLowerCase())) {
-    return "该仓库未开放飞书 PR 审批。";
+  const links = text.split(/\s+/).slice(1);
+  if (links[0]?.toLowerCase() === "list") links.shift();
+  const usage = "用法：npr list https://github.com/OWNER/REPO/pull/123 https://github.com/OWNER/REPO/pull/456";
+  if (!links.length) return usage;
+  const allowedRepos = new Set(env.FEISHU_NPR_REPOS?.toLowerCase().split(/[,\s]+/));
+  const prUrls: string[] = [];
+  const targets: string[] = [];
+  for (const link of links) {
+    const match = PR_URL.exec(link);
+    if (!match) return usage;
+    const [, repo, number] = match;
+    if (!allowedRepos.has(repo.toLowerCase())) return `仓库 ${repo} 未开放飞书 PR 审批。`;
+    prUrls.push(`https://github.com/${repo}/pull/${number}`);
+    targets.push(`${repo} #${number}`);
   }
   if (process.platform === "win32" && !/\.(exe|cmd|bat)$/i.test(executable)) {
     return "Windows 请配置 npr.cmd 或 npr.exe 的完整路径。";
   }
   try {
-    await run(executable, `https://github.com/${repo}/pull/${number}`);
-    return `npr 执行成功。PR ${repo} #${number}`;
+    await run(executable, prUrls);
+    return `npr 执行成功。PR ${targets.join("、")}`;
   } catch (error) {
-    return `${describeNprFailure(error)} 请在 GitHub 核对 ${repo} #${number} 的审批状态。`;
+    return `${describeNprFailure(error)} 请在 GitHub 核对 ${targets.join("、")} 的审批状态。`;
   }
 }
