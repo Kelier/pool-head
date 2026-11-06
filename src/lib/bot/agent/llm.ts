@@ -15,6 +15,7 @@
 //   analysis  只在「解读」阶段开启——需要推理的是分析，不是意图分类（推荐）
 //   all       规划也开启
 //   BOT_LLM_REASONING_EFFORT=low|high|max（默认 high）；BOT_LLM_ANALYSIS_MODEL 可让解读单独用更强的模型。
+import { readFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { TOOLS, type Plan, type ToolCall, type ToolDef } from "./tools";
 import { addTokens, reserveCall, __resetLlmBudget } from "./budget";
@@ -186,6 +187,18 @@ function userBlock(text: string, session: Session | undefined, catalog: Catalog)
   ].join("\n");
 }
 
+/** 读取部署者维护的指引和项目背景，缺文件时沿用内置提示。 */
+async function localPlannerContext(): Promise<string> {
+  const documents = await Promise.all(["agent.md", "memory.md"].map(async (name) => {
+    try {
+      return (await readFile(name, "utf8")).slice(0, 4000).trim();
+    } catch {
+      return "";
+    }
+  }));
+  return documents.filter(Boolean).join("\n\n");
+}
+
 export async function llmPlan(
   text: string, catalog: Catalog, role: "admin" | "member",
   deps: LlmDeps & { userId?: string; session?: Session } = {},
@@ -202,7 +215,8 @@ export async function llmPlan(
   const tools: ToolSpec[] = [...TOOLS.filter((t) => role === "admin" || t.role === "member"), ANALYZE_TOOL];
   const think = thinkingOn(cfg, thinkingConfig(env), "plan");
   const q: Req = {
-    system: plannerPrompt(catalog, deps.today?.() ?? dayKey()), user: userBlock(text.slice(0, 500), deps.session, catalog),
+    system: [plannerPrompt(catalog, deps.today?.() ?? dayKey()), await localPlannerContext()].filter(Boolean).join("\n\n"),
+    user: userBlock(text.slice(0, 500), deps.session, catalog),
     tools, maxTokens: 400, model: cfg.model, think, effort: thinkingConfig(env).effort, timeout: timeoutOf(env, think),
   };
   try {

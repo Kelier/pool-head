@@ -3,11 +3,12 @@
 import * as lark from "@larksuiteoapi/node-sdk";
 import { botDeps, handleMessageEvent, httpBackend, startAlertPusher, startDigest } from "../src/lib/bot";
 import { feishuConfigFromEnv } from "../src/lib/bot/feishu";
+import { runLocalNpr } from "../src/lib/bot/npr";
 import type { MessageEvent } from "../src/lib/bot/events";
 
 const { appId, appSecret, baseUrl } = feishuConfigFromEnv();
 const appUrl = process.env.APP_BASE_URL || "http://127.0.0.1:3111";
-const deps = botDeps(httpBackend(appUrl));
+const deps = { ...botDeps(httpBackend(appUrl)), nprRunner: runLocalNpr };
 
 const dispatcher = new lark.EventDispatcher({}).register({
   "im.message.receive_v1": async (data: unknown) => {

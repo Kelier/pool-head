@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, beforeEach } from "vitest";
+import { describe, it, expect, beforeAll, beforeEach, vi } from "vitest";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -132,6 +132,35 @@ describe("指令", () => {
 });
 
 describe("事件处理与权限", () => {
+  it("只将授权私聊里的明确 NPR 命令交给本机执行器", async () => {
+    const nprRunner = vi.fn(async () => {});
+    const llmFetch = vi.fn<typeof fetch>();
+    const base = deps();
+    const eventDeps = {
+      ...base,
+      env: {
+        ...base.env, BOT_AGENT: "llm", FEISHU_NPR_EXECUTABLE: "/usr/local/bin/npr",
+        FEISHU_NPR_OPEN_IDS: "ou_admin", FEISHU_NPR_REPOS: "kelier/pool-head",
+      },
+      nprRunner, llmFetch,
+    };
+    const url = "https://github.com/Kelier/pool-head/pull/42";
+    await handleMessageEvent(msg(`npr ${url}`, {}, "ou_member"), eventDeps);
+    await handleMessageEvent(msg(`npr ${url}`, { chat_type: "group", mentions: [{ key: "@_user_1", id: { open_id: "ou_bot" } }] }), eventDeps);
+    await handleMessageEvent(msg("npr https://github.com/other/repo/pull/42"), eventDeps);
+    await handleMessageEvent(msg(`npr ${url} && whoami`), eventDeps);
+    await handleMessageEvent(msg(`npr ${url}`), { ...eventDeps, nprRunner: undefined });
+    expect(nprRunner).not.toHaveBeenCalled();
+
+    const event = msg(`npr ${url}`);
+    await handleMessageEvent(event, eventDeps);
+    await handleMessageEvent(event, eventDeps);
+    expect(nprRunner).toHaveBeenCalledTimes(1);
+    expect(nprRunner).toHaveBeenCalledWith("/usr/local/bin/npr", url);
+    expect(llmFetch).not.toHaveBeenCalled();
+    expect(sent.at(-1)?.payload).toContain("npr 执行成功");
+  });
+
   it("默认拒绝：未授权用户收到自己的 open_id 指引，且不会执行指令", async () => {
     await handleMessageEvent(msg("总览", {}, "ou_stranger"), deps());
     expect(sent).toHaveLength(1);

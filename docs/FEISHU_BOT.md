@@ -457,3 +457,15 @@ BOT_LLM_DAILY_CAP=200
 ### 14.9 联调时多看两眼
 - 占位卡更新依赖飞书 `PATCH /im/v1/messages/:id`：需要应用有发消息权限，且卡片 `update_multi:true`（已设置）。若更新失败会自动改发新消息。
 - 周报按服务器本地时区判断“周几 / 几点”。
+
+## 本机 PR 审批
+
+用 `pnpm bot` 启动飞书长连接。普通消息可通过 `BOT_AGENT=llm`、`BOT_LLM_PROVIDER=deepseek` 和本机配置的 `DEEPSEEK_API_KEY` 使用 DeepSeek，意图规划会读取项目根目录的 `agent.md` 和 `memory.md`。
+
+先在本机终端确认 `npr <GitHub PR 链接>` 会用预期的 GitHub 账号提交 APPROVE，并能在无交互模式下运行。然后在 `.env` 中配置：
+
+- `FEISHU_NPR_EXECUTABLE` 填写 npr 可执行文件的绝对路径。如果 npr 是 shell 别名或函数，请先封装成可执行脚本。
+- `FEISHU_NPR_OPEN_IDS` 填写允许审批的飞书用户 open_id，逗号分隔。用户也需要有机器人访问权限。
+- `FEISHU_NPR_REPOS` 填写允许审批的 `owner/repo`，逗号分隔。
+
+重启长连接后，授权用户私聊发送 `npr https://github.com/OWNER/REPO/pull/123`。审批身份取决于 npr 使用的本机 GitHub 凭证。
