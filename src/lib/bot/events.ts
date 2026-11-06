@@ -2,6 +2,7 @@
 import { roleOf, RateLimiter } from "./auth";
 import { cleanText } from "./commands";
 import { agentMode, cancelPending, CANCEL_RE, CONFIRM_RE, confirmPending, handleNaturalLanguage, hasPending, hasIntentDraft, ProgressCard } from "./agent";
+import { handleNpr, type NprRunner } from "./npr";
 import { card } from "./cards";
 import type { BotBackend, BotCtx, Sender } from "./types";
 
@@ -23,6 +24,8 @@ export type EventDeps = {
   botOpenId?: () => Promise<string | null>;
   /** 测试注入：大模型请求所用的 fetch */
   llmFetch?: typeof fetch;
+  /** 仅本机长连接注入的 PR 审批执行器。 */
+  nprRunner?: NprRunner;
 };
 
 // 进程级共享状态：事件去重（飞书会重试）、限流
@@ -66,6 +69,11 @@ export async function handleMessageEvent(ev: MessageEvent, deps: EventDeps): Pro
 
   let text = "";
   try { text = (JSON.parse(m.content) as { text?: string }).text ?? ""; } catch { return reply("消息格式无法识别。"); }
+  if (typeof text !== "string") return reply("消息格式无法识别。");
+  const original = text.trim();
+  if (/^npr(?:\s|$)/i.test(original)) {
+    return reply(await handleNpr(original, userId, m.chat_type === "p2p", env, deps.nprRunner));
+  }
   if (agentMode(env) === "off") return reply("自然语言处理已关闭，目前无法处理消息。");
   // 旧写法也作为普通文本解析，不再因为斜杠跳过意图层或确认。
   const clean = cleanText(text).replace(/^[/／]+\s*/, "");
