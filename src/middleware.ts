@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { canAccessHoe, hoeClient, usesHoeApproval, usesHoeAuth } from "@/lib/auth/hoe";
 import { APPROVAL_ROUTE, APPROVED_SESSION_COOKIE, hasApprovedSession } from "@/lib/auth/approval";
-import { isLocalAdminRequest, LOCAL_ADMIN_COOKIE, localAdminExpiry } from "@/lib/auth/local-admin";
+import { isLocalAdminRequest, LOCAL_ADMIN_COOKIE, localAdminExpiry, localAdminOnly } from "@/lib/auth/local-admin";
 import { digest, hasSession, SESSION_COOKIE } from "@/lib/auth/store";
 
 const PUBLIC_GET = new Set(["/login", "/api/auth/login", "/api/auth/callback"]);
@@ -26,6 +26,13 @@ export async function middleware(request: NextRequest) {
   if (path === "/local-admin" || path.startsWith("/local-admin/") || path === "/api/auth/local-admin") {
     return local ? NextResponse.next() : new NextResponse(null, { status: 404 });
   }
+  const onlyAdmin = localAdminOnly();
+  if (onlyAdmin) {
+    if (path === "/login" && request.method === "GET") {
+      return local ? NextResponse.redirect(new URL("/local-admin", request.url)) : new NextResponse(null, { status: 404 });
+    }
+    if (path.startsWith("/api/auth/") && path !== "/api/auth/logout") return new NextResponse(null, { status: 404 });
+  }
   const hoe = usesHoeAuth();
   const approval = usesHoeApproval();
   if (approval && path === APPROVAL_ROUTE && ["GET", "POST"].includes(request.method)) return NextResponse.next();
@@ -37,7 +44,7 @@ export async function middleware(request: NextRequest) {
   if (await isBotRun(request)) return NextResponse.next();
 
   const origin = request.headers.get("origin");
-  if (!["GET", "HEAD", "OPTIONS"].includes(request.method) && origin && origin !== new URL(process.env.APP_PUBLIC_URL ?? request.url).origin) {
+  if (!["GET", "HEAD", "OPTIONS"].includes(request.method) && origin && origin !== new URL(onlyAdmin ? request.url : process.env.APP_PUBLIC_URL ?? request.url).origin) {
     return NextResponse.json({ error: "请求来源不合法" }, { status: 403 });
   }
 
@@ -46,6 +53,8 @@ export async function middleware(request: NextRequest) {
     let authorized: boolean;
     if (local && localAdminExpiry(request.cookies.get(LOCAL_ADMIN_COOKIE)?.value)) {
       authorized = true;
+    } else if (onlyAdmin) {
+      authorized = false;
     } else if (approval) {
       authorized = hasApprovedSession(request.cookies.get(APPROVED_SESSION_COOKIE)?.value);
     } else if (hoe) {
@@ -69,8 +78,8 @@ export async function middleware(request: NextRequest) {
     return NextResponse.json({ error: "登录服务暂时不可用" }, { status: 503 });
   }
 
-  if (path.startsWith("/api/")) return NextResponse.json({ error: hoe ? "请使用获准的 HOE 账号登录" : "请先通过飞书登录" }, { status: 401 });
-  const login = new URL("/login", request.url);
+  if (path.startsWith("/api/")) return NextResponse.json({ error: onlyAdmin ? "请先使用本地管理员账号登录" : hoe ? "请使用获准的 HOE 账号登录" : "请先通过飞书登录" }, { status: 401 });
+  const login = new URL(onlyAdmin ? "/local-admin" : "/login", request.url);
   login.searchParams.set("next", path + request.nextUrl.search);
   return NextResponse.redirect(login);
 }

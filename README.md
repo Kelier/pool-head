@@ -176,7 +176,7 @@ VALUES ('HOE 用户 UUID', 'cli_应用 ID', 'ou_用户 Open ID');
 
 ### 本机备用管理员
 
-在 `.env.local` 设置 `LOCAL_ADMIN_ENABLED=1`，用 `pnpm dev --hostname 127.0.0.1 --port 3111` 启动。运行 `node --env-file=.env.local --import tsx scripts/local-admin.ts` 创建或恢复备用凭证，终端会显示生成的密码。登录入口为 `http://localhost:3111/local-admin`，登录后可在 `/local-admin/reset` 重置。每次生成或重置后有效期为 7 天，旧密码及会话立即失效。
+在 `.env` 或 `.env.local` 设置 `WEB_AUTH_MODE=local_admin`。开发时运行 `pnpm dev --hostname 127.0.0.1 --port 3111`，生产构建运行 `pnpm build` 后用 `pnpm start` 启动。两者都可使用同一 SQLite 管理员。尚未创建管理员时，运行 `node --env-file-if-exists=.env --env-file-if-exists=.env.local --import tsx scripts/local-admin.ts` 生成凭证，终端会显示生成的密码。登录入口为 `http://localhost:3111/local-admin`，登录后可在 `/local-admin/reset` 重置。每次生成或重置后有效期为 7 天，旧密码及会话立即失效。
 
 ## 上线注意
 

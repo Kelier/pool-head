@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { cookies } from "next/headers";
-import { LOCAL_ADMIN_COOKIE, LOCAL_ADMIN_NAME, localAdminExpiry } from "@/lib/auth/local-admin";
+import { LOCAL_ADMIN_COOKIE, LOCAL_ADMIN_NAME, localAdminExpiry, localAdminOnly } from "@/lib/auth/local-admin";
 import styles from "../login/login.module.css";
 
 /** 本地管理员登录入口。 */
@@ -12,7 +12,7 @@ export default async function LocalAdminPage({ searchParams }: { searchParams: P
       <section className={styles.panel} aria-labelledby="local-title">
         <header className={styles.brand}>
           <div><h1 id="local-title" className={styles.title}>本地管理员</h1>
-            <p className={styles.subtitle}>用于本机调试的备用登录入口。</p></div>
+            <p className={styles.subtitle}>使用已授予的管理员账号登录控制台。</p></div>
         </header>
         {error && <p role="alert" className={styles.notice}>{error === "rate" ? "尝试次数过多，请一分钟后重试。" : "账号或密码不正确，或凭证已过期。"}</p>}
         {active ? (
@@ -22,7 +22,7 @@ export default async function LocalAdminPage({ searchParams }: { searchParams: P
             <label className={styles.field}>账号<input name="username" defaultValue={LOCAL_ADMIN_NAME} autoComplete="username" required /></label>
             <label className={styles.field}>密码<input name="password" type="password" autoComplete="current-password" required /></label>
             <button className={`btn primary ${styles.submit}`} type="submit">登录控制台</button>
-            <Link href="/login">返回 HOE 登录</Link>
+            {!localAdminOnly() && <Link href="/login">返回常规登录</Link>}
           </form>
         )}
       </section>
