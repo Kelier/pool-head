@@ -23,9 +23,10 @@ function formRequest(fields: Record<string, string>, token?: string, origin = OR
   });
 }
 
-it("本机管理员仅在开发模式启用，重置凭证会使旧密码和旧会话失效", async () => {
+it("本机管理员可显式在生产模式启用，重置后旧凭证失效", async () => {
   vi.stubEnv("DB_FILE", join(mkdtempSync(join(tmpdir(), "pool-local-admin-")), "test.db"));
   vi.stubEnv("NODE_ENV", "development");
+  vi.stubEnv("WEB_AUTH_MODE", "feishu");
   vi.stubEnv("LOCAL_ADMIN_ENABLED", "1");
   const expiresAt = await provisionLocalAdmin(OLD_PASSWORD);
   expect(expiresAt - Date.now()).toBeGreaterThan(6 * 24 * 3600 * 1000);
@@ -47,4 +48,10 @@ it("本机管理员仅在开发模式启用，重置凭证会使旧密码和旧�
 
   vi.stubEnv("NODE_ENV", "production");
   expect((await POST(formRequest({ username: "local-admin", password: NEW_PASSWORD }))).status).toBe(404);
+
+  vi.stubEnv("WEB_AUTH_MODE", "local_admin");
+  expect((await middleware(new NextRequest(ORIGIN + "/login"))).headers.get("location")).toBe(ORIGIN + "/local-admin");
+  expect((await middleware(new NextRequest(ORIGIN + "/api/auth/login"))).status).toBe(404);
+  const production = await POST(formRequest({ username: "local-admin", password: NEW_PASSWORD }));
+  expect(production.cookies.get(LOCAL_ADMIN_COOKIE)?.value).toBeTruthy();
 });

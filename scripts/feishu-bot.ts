@@ -2,13 +2,10 @@
 // 用法：pnpm bot      需要先启动 Web 应用（pnpm dev / pnpm start），写操作经 HTTP 转给它，保证 TikHub 限速只有一份。
 import * as lark from "@larksuiteoapi/node-sdk";
 import { botDeps, handleMessageEvent, httpBackend, startAlertPusher, startDigest } from "../src/lib/bot";
+import { feishuConfigFromEnv } from "../src/lib/bot/feishu";
 import type { MessageEvent } from "../src/lib/bot/events";
 
-const appId = process.env.FEISHU_APP_ID, appSecret = process.env.FEISHU_APP_SECRET;
-if (!appId || !appSecret) {
-  console.error("缺少 FEISHU_APP_ID / FEISHU_APP_SECRET，见 docs/FEISHU_BOT.md");
-  process.exit(1);
-}
+const { appId, appSecret, baseUrl } = feishuConfigFromEnv();
 const appUrl = process.env.APP_BASE_URL || "http://127.0.0.1:3111";
 const deps = botDeps(httpBackend(appUrl));
 
@@ -19,10 +16,22 @@ const dispatcher = new lark.EventDispatcher({}).register({
   },
 });
 
-const ws = new lark.WSClient({ appId, appSecret, domain: process.env.FEISHU_BASE_URL?.includes("larksuite") ? lark.Domain.Lark : lark.Domain.Feishu, loggerLevel: lark.LoggerLevel.info });
-ws.start({ eventDispatcher: dispatcher });
-if (process.env.FEISHU_PUSH_ALERTS !== "0") {
-  startAlertPusher(deps.sender, process.env.APP_PUBLIC_URL || "http://localhost:3111");
-  startDigest(deps.sender, process.env.APP_PUBLIC_URL || "http://localhost:3111"); // 周报：到点才发，见 BOT_DIGEST / 「开启周报」
-}
-console.log(`[bot] 长连接已启动；Web 应用：${appUrl}`);
+const ws = new lark.WSClient({
+  appId,
+  appSecret,
+  domain: baseUrl.includes("larksuite") ? lark.Domain.Lark : lark.Domain.Feishu,
+  loggerLevel: lark.LoggerLevel.info,
+  onReady: () => {
+    console.log(`[bot] 飞书长连接已建立；Web 应用：${appUrl}`);
+    if (process.env.FEISHU_PUSH_ALERTS !== "0") {
+      const publicUrl = process.env.APP_PUBLIC_URL || "http://localhost:3111";
+      startAlertPusher(deps.sender, publicUrl);
+      startDigest(deps.sender, publicUrl);
+    }
+  },
+  onError: () => {
+    console.error("[bot] 飞书长连接建立失败，请检查上方 SDK 错误、应用凭证与事件订阅配置。");
+  },
+});
+console.log(`[bot] 正在连接飞书；Web 应用：${appUrl}`);
+await ws.start({ eventDispatcher: dispatcher });

@@ -10,9 +10,14 @@ export const LOCAL_ADMIN_SECONDS = 7 * 24 * 60 * 60;
 const scryptAsync = promisify(scrypt);
 const LOOPBACK = new Set(["localhost", "127.0.0.1", "::1", "[::1]", "::ffff:127.0.0.1"]);
 
-/** 备用账号仅在显式启用的本机开发服务上可用。 */
+/** 选择仅使用本机 SQLite 管理员的登录模式。 */
+export function localAdminOnly(): boolean {
+  return process.env.WEB_AUTH_MODE === "local_admin";
+}
+
+/** 管理员模式支持本机生产启动，旧开关仍仅用于开发环境。 */
 export function localAdminEnabled(): boolean {
-  return process.env.NODE_ENV === "development" && process.env.LOCAL_ADMIN_ENABLED === "1";
+  return localAdminOnly() || (process.env.NODE_ENV === "development" && process.env.LOCAL_ADMIN_ENABLED === "1");
 }
 
 /** 外部来源或转发地址不能使用本机备用入口。 */

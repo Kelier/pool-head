@@ -4,7 +4,7 @@ import type { Card, Sender } from "./types";
 type Cfg = { appId: string; appSecret: string; baseUrl: string };
 
 export function feishuConfigFromEnv(env: Record<string, string | undefined> = process.env): Cfg {
-  const appId = env.FEISHU_APP_ID, appSecret = env.FEISHU_APP_SECRET;
+  const appId = env.FEISHU_APP_ID?.trim(), appSecret = env.FEISHU_APP_SECRET?.trim();
   if (!appId || !appSecret) throw new Error("缺少 FEISHU_APP_ID / FEISHU_APP_SECRET（见 .env.example）");
   // 国际版 Lark 用 https://open.larksuite.com
   return { appId, appSecret, baseUrl: env.FEISHU_BASE_URL || "https://open.feishu.cn" };
