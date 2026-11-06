@@ -15,7 +15,8 @@ process.env.TIKHUB_API_KEY = "test-key"; // 「用量」指令会读取调用预
 import { db } from "../src/lib/db";
 import { saveCompetitor } from "../src/lib/queries";
 import { addAlert } from "../src/lib/alerts";
-import { parseCommand, parseDays, findCompetitor, dispatch } from "../src/lib/bot/commands";
+import { cleanText, parseDays, findCompetitor, runCommand } from "../src/lib/bot/commands";
+import { __resetAgentState } from "../src/lib/bot/agent";
 import { handleMessageEvent, __resetBotState, type MessageEvent } from "../src/lib/bot/events";
 import { roleOf, RateLimiter } from "../src/lib/bot/auth";
 import { card } from "../src/lib/bot/cards";
@@ -50,20 +51,19 @@ beforeAll(() => {
   post(1, `c${c}`, "x", "p4");
   void b;
 });
-beforeEach(() => { sent.length = 0; runs.length = 0; __resetBotState(); });
+beforeEach(() => { sent.length = 0; runs.length = 0; __resetBotState(); __resetAgentState(); });
 
 const ctx = (role: BotCtx["role"] = "member"): BotCtx => ({ userId: "u", chatId: "oc_1", chatType: "p2p", role, baseUrl: "https://mon.example.com", sender, backend });
 const msg = (text: string, o: Partial<NonNullable<MessageEvent["message"]>> = {}, user = "ou_admin"): MessageEvent => ({
   sender: { sender_id: { open_id: user }, sender_type: "user" },
   message: { message_id: `m_${Math.random()}`, chat_id: "oc_1", chat_type: "p2p", message_type: "text", content: JSON.stringify({ text }), ...o },
 });
-const deps = () => ({ sender, backend, env: process.env as Record<string, string | undefined>, botOpenId: async () => "ou_bot" });
+const deps = () => ({ sender, backend, env: { ...process.env, BOT_AGENT: "rules" }, botOpenId: async () => "ou_bot" });
 
 describe("解析", () => {
-  it("去掉 @ 占位符，切词，别名大小写不敏感", () => {
-    expect(parseCommand("@_user_1  复投   LibTV ")).toEqual({ name: "复投", args: ["LibTV"] });
-    expect(parseCommand("/HELP")).toEqual({ name: "help", args: [] });
-    expect(parseCommand("   ")).toBeNull();
+  it("去掉 @ 占位符和多余空格", () => {
+    expect(cleanText("@_user_1  复投   LibTV ")).toBe("复投 LibTV");
+    expect(cleanText("   ")).toBe("");
   });
   it("天数写法", () => {
     expect(["近30天", "7天", "90", "一周", "半年", "abc", undefined].map((x) => parseDays(x))).toEqual([30, 7, 90, 7, 180, null, null]);
@@ -77,51 +77,56 @@ describe("解析", () => {
   });
 });
 
+/** 按内部名称和参数调用处理器，便于验证卡片内容。 */
+function runHandler(text: string, context: BotCtx) {
+  const [name, ...args] = text.split(" ");
+  return runCommand(name, args, context);
+}
+
 describe("指令", () => {
   it("帮助：成员看不到「抓取」，管理员能看到", async () => {
-    const m = JSON.stringify((await dispatch("帮助", ctx("member"))).card);
-    const a = JSON.stringify((await dispatch("帮助", ctx("admin"))).card);
-    expect(m).not.toContain("抓取 竞品名");
-    expect(a).toContain("抓取 竞品名");
+    const m = JSON.stringify((await runHandler("帮助", ctx("member"))).card);
+    const a = JSON.stringify((await runHandler("帮助", ctx("admin"))).card);
+    expect(m).not.toContain("抓取 LibTV");
+    expect(a).toContain("抓取 LibTV");
   });
   it("总览 / 竞品 / 复投 / 新增 / 账号 / 对比 / 任务 / 用量 / 提醒 都返回卡片", async () => {
     for (const t of ["总览", "竞品", "竞品 LibTV", "复投", "复投 LibTV", "新增", "账号 x", "对比 LibTV 即梦AI", "任务", "任务 1", "用量", "提醒"]) {
-      const r = await dispatch(t, ctx());
+      const r = await runHandler(t, ctx());
       expect(r.card || r.text, t).toBeTruthy();
       if (r.card) { expect((r.card as any).header.title.content, t).toBeTruthy(); expect(JSON.stringify(r.card).length, t).toBeLessThan(30_000); } // eslint-disable-line @typescript-eslint/no-explicit-any
     }
   });
   it("复投内容正确：x 在 LibTV 投放 2 次", async () => {
-    const r = await dispatch("复投 LibTV", ctx());
+    const r = await runHandler("复投 LibTV", ctx());
     expect(JSON.stringify(r.card)).toContain("名-x");
     expect(JSON.stringify(r.card)).not.toContain("名-y"); // y 只有 1 次
   });
   it("对比：共同账号 x", async () => {
-    expect(JSON.stringify((await dispatch("对比 LibTV 即梦AI", ctx())).card)).toContain("名-x");
+    expect(JSON.stringify((await runHandler("对比 LibTV 即梦AI", ctx())).card)).toContain("名-x");
   });
   it("导出 → xlsx 文件（zip 魔数 PK）", async () => {
-    const r = await dispatch("导出 账号 LibTV", ctx());
+    const r = await runHandler("导出 账号 LibTV", ctx());
     expect(r.file!.name).toMatch(/\.xlsx$/);
     expect(r.file!.data.subarray(0, 2).toString()).toBe("PK");
-    expect((await dispatch("导出 报告 LibTV", ctx())).file).toBeTruthy();
-    expect((await dispatch("导出 什么", ctx())).text).toContain("用法");
+    expect((await runHandler("导出 报告 LibTV", ctx())).file).toBeTruthy();
+    expect((await runHandler("导出 什么", ctx())).text).toContain("用法");
   });
   it("抓取：仅管理员；解析天数；调用 backend", async () => {
-    expect((await dispatch("抓取 LibTV", ctx("member"))).text).toContain("仅管理员");
+    expect((await runHandler("抓取 LibTV", ctx("member"))).text).toContain("仅管理员");
     expect(runs).toHaveLength(0);
-    const r = await dispatch("抓取 LibTV 近7天", ctx("admin"));
+    const r = await runHandler("抓取 LibTV 近7天", ctx("admin"));
     expect(runs).toEqual([{ id: 1, days: 7 }]);
     expect(r.text).toContain("任务 #99");
   });
   it("未知指令与意图解析钩子", async () => {
-    expect((await dispatch("你好呀", ctx())).text).toContain("没听懂");
-    const r = await dispatch("最近有啥新账号", ctx(), async () => ({ name: "新增", args: [] }));
-    expect(r.card || r.text).toBeTruthy();
+    expect((await runHandler("你好呀", ctx())).text).toContain("没有");
+    expect((await runHandler("新增", ctx())).card).toBeTruthy();
   });
   it("订阅/退订写库（管理员）", async () => {
-    await dispatch("订阅", ctx("admin"));
+    await runHandler("订阅", ctx("admin"));
     expect(db().prepare("SELECT COUNT(*) c FROM bot_subs WHERE chat_id='oc_1'").get()).toMatchObject({ c: 1 });
-    await dispatch("退订", ctx("admin"));
+    await runHandler("退订", ctx("admin"));
     expect(db().prepare("SELECT COUNT(*) c FROM bot_subs").get()).toMatchObject({ c: 0 });
   });
 });
@@ -135,13 +140,15 @@ describe("事件处理与权限", () => {
   });
   it("成员可查询、不可抓取；管理员可抓取", async () => {
     await handleMessageEvent(msg("总览", {}, "ou_member"), deps());
-    expect(sent[0].kind).toBe("card");
+    expect(sent.some((message) => message.kind === "card")).toBe(true);
     sent.length = 0;
     await handleMessageEvent(msg("抓取 LibTV", {}, "ou_member"), deps());
     expect(sent[0].payload).toContain("仅管理员");
     expect(runs).toHaveLength(0);
     sent.length = 0;
     await handleMessageEvent(msg("抓取 LibTV", {}, "ou_admin"), deps());
+    expect(runs).toHaveLength(0);
+    await handleMessageEvent(msg("确认"), deps());
     expect(runs).toHaveLength(1);
   });
   it("群聊：未 @ 机器人不响应；@ 了才响应；@ 别人不响应", async () => {
@@ -151,7 +158,7 @@ describe("事件处理与权限", () => {
     await handleMessageEvent(msg("@_user_1 总览", { ...g, mentions: [{ key: "@_user_1", id: { open_id: "ou_other" } }] }, "ou_member"), deps());
     expect(sent).toHaveLength(0);
     await handleMessageEvent(msg("@_user_1 总览", { ...g, mentions: [{ key: "@_user_1", id: { open_id: "ou_bot" } }] }, "ou_member"), deps());
-    expect(sent).toHaveLength(1);
+    expect(sent.filter((message) => message.kind === "card")).toHaveLength(1);
     expect(sent[0].replyTo).toBeTruthy(); // 群里用"回复"保持上下文
   });
   it("允许的群里，群成员即使不在用户名单也算成员", () => {
@@ -162,8 +169,10 @@ describe("事件处理与权限", () => {
   it("事件去重（飞书会重试）", async () => {
     const e = msg("总览");
     await handleMessageEvent(e, deps());
+    const replies = sent.length;
+    expect(replies).toBeGreaterThan(0);
     await handleMessageEvent(e, deps());
-    expect(sent).toHaveLength(1);
+    expect(sent).toHaveLength(replies);
   });
   it("机器人自己发的消息、非文本消息", async () => {
     const e = msg("总览"); e.sender!.sender_type = "app";
@@ -173,13 +182,14 @@ describe("事件处理与权限", () => {
     expect(sent[0].payload).toContain("只支持文字");
   });
   it("限流：每人每分钟 20 条", async () => {
-    for (let i = 0; i < 22; i++) await handleMessageEvent(msg("帮助"), deps());
+    for (let i = 0; i < 22; i++) await handleMessageEvent(msg("确认"), deps());
     expect(sent.filter((s) => s.kind === "text" && String(s.payload).includes("太频繁")).length).toBe(2);
   });
   it("指令异常不会炸，回复可读错误", async () => {
     const bad: BotBackend = { runCompetitor: async () => { throw new Error("超出预算"); } };
     await handleMessageEvent(msg("抓取 LibTV"), { ...deps(), backend: bad });
-    expect(sent[0].payload).toContain("出错了：超出预算");
+    await handleMessageEvent(msg("确认"), { ...deps(), backend: bad });
+    expect(sent.at(-1)?.payload).toContain("出错了：超出预算");
   });
 });
 

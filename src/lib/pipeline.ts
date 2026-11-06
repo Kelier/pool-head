@@ -2,11 +2,11 @@ import { estimateSearchPages } from "./search-pages";
 import { db } from "./db";
 import { classify } from "./classify";
 import { PLATFORMS } from "./platforms";
-import { countCallsToday, runtimeConfigFromEnv, BudgetExceededError } from "./tikhub/client";
+import { countCallsToday, runtimeConfigFromEnv, BudgetExceededError, TikHubError } from "./tikhub/client";
 import { CircuitOpenError, Semaphore } from "./tikhub/limiter";
 import { getSettings } from "./settings";
 import { addAlert } from "./alerts";
-import type { NormPost, Progress, TaskConfig } from "./types";
+import type { NormPost, Progress, SearchPage, TaskConfig } from "./types";
 
 const DAY = 86_400_000;
 
@@ -23,7 +23,7 @@ export function estimateCalls(cfg: TaskConfig): number {
   const pages = cfg.maxPages ?? estimateSearchPages(cfg.platforms.length, cfg.keywords.length);
   const search = cfg.platforms.length * cfg.keywords.length * pages;
   // 需单独补粉丝数的平台：每个命中账号 1 次调用，粗估 = 每页约 12 个账号
-  const accounts = Math.min(100, cfg.keywords.length * pages * 12);
+  const accounts = Math.min(100, cfg.maxPosts ?? Infinity, cfg.keywords.length * pages * 12);
   const enrich = cfg.platforms.reduce((n, p) => n + (PLATFORMS[p].enrichCalls?.() ?? (PLATFORMS[p].followers ? 1 : 0)), 0) * accounts;
   return search + enrich;
 }
@@ -47,14 +47,16 @@ function scopeCounts(scope: string): Map<string, number> {
 }
 
 export async function runTask(taskId: number): Promise<void> {
-  const row = db().prepare("SELECT config, scope, name FROM tasks WHERE id = ?").get(taskId) as
-    | { config: string; scope: string; name: string | null }
+  const row = db().prepare("SELECT config, scope, name, source FROM tasks WHERE id = ?").get(taskId) as
+    | { config: string; scope: string; name: string | null; source: string }
     | undefined;
   if (!row) throw new Error(`task ${taskId} 不存在`);
   const cfg = JSON.parse(row.config) as TaskConfig;
   const settings = getSettings();
   const range = resolveRange(cfg.time);
-  const p: Progress = { stage: "searching", postsSeen: 0, postsMatched: 0, calls: 0 };
+  const searchOptions = { ...range, refresh: row.source === "rerun" };
+  const postsSeenByPlatform: NonNullable<Progress["postsSeenByPlatform"]> = {};
+  const p: Progress = { stage: "searching", postsSeen: 0, postsSeenByPlatform, postsMatched: 0, calls: 0 };
   db().prepare("UPDATE tasks SET status='running', error=NULL WHERE id=?").run(taskId);
   const checkCancel = () => {
     const r = db().prepare("SELECT cancel FROM tasks WHERE id=?").get(taskId) as { cancel: number } | undefined;
@@ -63,29 +65,56 @@ export async function runTask(taskId: number): Promise<void> {
 
   try {
     const before = scopeCounts(row.scope);
-    const hits = new Map<string, { post: NormPost; keywords: Set<string>; confidence: number; reasons: string[] }>();
-
-    let budgetPause: BudgetExceededError | undefined;
-    /** 预算耗尽时保留已获取的数据，其他错误仍按原流程处理。 */
-    async function withinBudget<T>(request: () => Promise<T>): Promise<T | undefined> {
-      if (budgetPause) return undefined;
+    const d = db();
+    const accounts = new Set<string>();
+    const platformErrors: string[] = [];
+    p.platformErrors = platformErrors;
+    let pause: BudgetExceededError | CircuitOpenError | undefined;
+    /** 只有共享预算或账号级熔断会停止整个任务的请求。 */
+    async function whileRequestsAllowed<T>(request: () => Promise<T>): Promise<T | undefined> {
+      if (pause) return undefined;
       try {
         return await request();
       } catch (error) {
-        if (!(error instanceof BudgetExceededError)) throw error;
-        budgetPause = error;
+        if (!(error instanceof BudgetExceededError || (error instanceof CircuitOpenError && error.fatal))) throw error;
+        pause = error;
         return undefined;
       }
     }
 
-    search: for (const platform of new Set(cfg.platforms)) {
-      for (const kw of new Set(cfg.keywords)) {
+    for (const platform of new Set(cfg.platforms)) {
+      const adapter = PLATFORMS[platform];
+      const hits = new Map<string, { post: NormPost; keywords: Set<string>; confidence: number; reasons: string[] }>();
+      const previousMatches = p.postsMatched ?? 0;
+      let platformCircuitOpen = false;
+      let platformPostsSeen = 0;
+      const scanToPostLimit = platform === "xiaohongshu" && cfg.maxPosts != null;
+      p.stage = "searching";
+      setProgress(taskId, p);
+
+      search: for (const kw of new Set(cfg.keywords)) {
         let next: Record<string, string | number> | null = null;
         const cursors = new Set<string>();
         const seenPages = new Set<string>();
         for (let page = 0; cfg.maxPages == null || page < cfg.maxPages; page++) {
           checkCancel();
-          const res = await withinBudget(() => PLATFORMS[platform].search(kw, range.days, next, taskId, range));
+          let res: SearchPage | undefined;
+          try {
+            res = await whileRequestsAllowed(() => adapter.search(kw, range.days, next, taskId, searchOptions));
+          } catch (error) {
+            if (!(error instanceof TikHubError || error instanceof CircuitOpenError)) throw error;
+            if (error instanceof TikHubError) p.calls = (p.calls ?? 0) + 1;
+            const requestId = error.message.match(/"request_id"\s*:\s*"([\w-]+)"/)?.[1];
+            const reason = error instanceof TikHubError && error.status
+              ? `HTTP ${error.status}${requestId ? `，请求 ID ${requestId}` : ""}`
+              : error.message;
+            platformErrors.push(`${adapter.name}「${kw}」第 ${page + 1} 页搜索失败（${reason}）`);
+            if (error instanceof CircuitOpenError) {
+              platformCircuitOpen = true;
+              break search;
+            }
+            break;
+          }
           if (!res) break search;
           p.calls = (p.calls ?? 0) + 1;
           // 某些平台会换游标但仍返回同一批作品。
@@ -94,8 +123,12 @@ export async function runTask(taskId: number): Promise<void> {
             if (seenPages.has(fingerprint)) break;
             seenPages.add(fingerprint);
           }
-          p.postsSeen = (p.postsSeen ?? 0) + res.posts.length;
-          for (const post of res.posts) {
+          // 请求仍按平台的页大小发送，最后一页只检查剩余条数。
+          const posts = cfg.maxPosts == null ? res.posts : res.posts.slice(0, cfg.maxPosts - platformPostsSeen);
+          platformPostsSeen += posts.length;
+          postsSeenByPlatform[platform] = platformPostsSeen;
+          p.postsSeen = (p.postsSeen ?? 0) + posts.length;
+          for (const post of posts) {
             if (post.publishedAt < range.from || post.publishedAt > range.to) continue;
             const c = classify(post, cfg, settings.rules);
             if (!c || c.confidence < cfg.minConfidence) continue;
@@ -108,10 +141,12 @@ export async function runTask(taskId: number): Promise<void> {
               hits.set(key, { post, keywords: new Set(c.matchedKeywords), confidence: c.confidence, reasons: c.reasons });
             }
           }
-          p.postsMatched = hits.size;
+          p.postsMatched = previousMatches + hits.size;
           setProgress(taskId, p);
-          // 按最新排序：整页都早于起点，后面更早，停止翻页
-          if (!res.hasMore || (res.posts.length > 0 && res.posts.every((post) => post.publishedAt < range.from))) break;
+          if (cfg.maxPosts != null && platformPostsSeen >= cfg.maxPosts) break search;
+          if (!res.hasMore) break;
+          // 小红书跨页可能乱序，指定条数时继续扫描，发布时间仍逐条筛选。
+          if (!scanToPostLimit && res.posts.length > 0 && res.posts.every((post) => post.publishedAt < range.from)) break;
           // 比较已使用的分页参数，拦住不前进或来回跳的游标。
           const entries = Object.entries(res.next).sort(([a], [b]) => a.localeCompare(b));
           const cursor = JSON.stringify(entries);
@@ -120,90 +155,105 @@ export async function runTask(taskId: number): Promise<void> {
           next = res.next;
         }
       }
-    }
 
-    // 账号维度：换出真实账号 → 补粉丝数 → 粉丝/互动过滤 → 入库
-    p.stage = "enriching";
-    setProgress(taskId, p);
-    // 搜索结果没有作者稳定 ID 的平台（视频号）：每个临时账号用一条命中作品换出真实账号。
-    // 只对命中的账号做；失败（null）则沿用临时 ID，同一作者的作品仍聚在一起。
-    const resolved = new Map<string, { uid: string; name?: string; url?: string } | null>();
-    for (const { post } of hits.values()) {
-      const resolve = PLATFORMS[post.platform].resolveAccount;
-      const k = `${post.platform}:${post.accountUid}`;
-      if (!resolve || resolved.has(k)) continue;
-      checkCancel();
-      const account = await withinBudget(() => resolve(post, taskId));
-      if (account === undefined) break;
-      resolved.set(k, account);
-      p.calls = (p.calls ?? 0) + 1;
-    }
-    for (const { post } of hits.values()) {
-      const r = resolved.get(`${post.platform}:${post.accountUid}`); // 先按旧 ID 查，再改写
-      if (!r) continue;
-      post.accountUid = r.uid;
-      if (r.name) post.accountName = r.name;
-      if (r.url !== undefined) post.accountUrl = r.url;
-    }
-    setProgress(taskId, p);
-    const followers = new Map<string, number | null>();
-    for (const { post } of hits.values()) {
-      const k = `${post.platform}:${post.accountUid}`;
-      if (post.followers != null) followers.set(k, post.followers);
-      else if (!followers.has(k)) followers.set(k, null);
-    }
-    for (const [k, v] of followers) {
-      if (v !== null) continue;
-      checkCancel();
-      const i = k.indexOf(":");
-      const platform = k.slice(0, i) as TaskConfig["platforms"][number];
-      const fn = PLATFORMS[platform]?.followers;
-      if (fn) {
-        const count = await withinBudget(() => fn(k.slice(i + 1), taskId));
-        if (count === undefined) break;
-        followers.set(k, count);
+      // 账号维度：换出真实账号 → 补粉丝数 → 粉丝/互动过滤 → 入库
+      p.stage = "enriching";
+      setProgress(taskId, p);
+      // 搜索结果没有作者稳定 ID 的平台（视频号）：每个临时账号用一条命中作品换出真实账号。
+      // 只对命中的账号做；失败（null）则沿用临时 ID，同一作者的作品仍聚在一起。
+      /** 平台补资料失败时沿用搜索结果，避免丢掉已命中的作品。 */
+      async function enrich<T>(phase: string, request: () => Promise<T>): Promise<T | undefined> {
+        if (platformCircuitOpen) return undefined;
+        try {
+          return await whileRequestsAllowed(request);
+        } catch (error) {
+          if (!(error instanceof TikHubError || error instanceof CircuitOpenError)) throw error;
+          platformCircuitOpen = true;
+          platformErrors.push(`${adapter.name}${phase}失败（${error.message}）`);
+          return undefined;
+        }
+      }
+
+      const resolved = new Map<string, { uid: string; name?: string; url?: string } | null>();
+      for (const { post } of hits.values()) {
+        const resolve = PLATFORMS[post.platform].resolveAccount;
+        const k = `${post.platform}:${post.accountUid}`;
+        if (!resolve || resolved.has(k)) continue;
+        checkCancel();
+        const account = await enrich("识别账号", () => resolve(post, taskId));
+        if (account === undefined) break;
+        resolved.set(k, account);
         p.calls = (p.calls ?? 0) + 1;
       }
-    }
-
-    const d = db();
-    const now = Date.now();
-    const upAcc = d.prepare(
-      `INSERT INTO accounts(platform, uid, name, profile_url, followers, updated_at) VALUES (?,?,?,?,?,?)
-       ON CONFLICT(platform, uid) DO UPDATE SET name=excluded.name, profile_url=excluded.profile_url,
-         followers=COALESCE(excluded.followers, accounts.followers), updated_at=excluded.updated_at`,
-    );
-    const upPost = d.prepare(
-      `INSERT OR REPLACE INTO promo_posts(platform, post_id, task_id, scope, account_uid, url, title, published_at,
-         likes, comments, plays, keywords, confidence, reasons, crawled_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-    );
-    const accounts = new Set<string>();
-    d.exec("BEGIN");
-    try {
-      for (const h of hits.values()) {
-        const { post } = h;
-        const f = followers.get(`${post.platform}:${post.accountUid}`) ?? null;
-        if (cfg.followers) {
-          // 粉丝数未知时保留（宁可多不漏），由 UI 显示"未知"
-          if (f != null && cfg.followers.min != null && f < cfg.followers.min) continue;
-          if (f != null && cfg.followers.max != null && f > cfg.followers.max) continue;
-        }
-        if (!PLATFORMS[post.platform].noEngagement) {
-          if (cfg.engagement?.minLikes != null && post.likes < cfg.engagement.minLikes) continue;
-          if (cfg.engagement?.minComments != null && post.comments < cfg.engagement.minComments) continue;
-        }
-        upAcc.run(post.platform, post.accountUid, post.accountName, post.accountUrl, f, now);
-        upPost.run(
-          post.platform, post.postId, taskId, row.scope, post.accountUid, post.url, post.title, post.publishedAt,
-          post.likes, post.comments, post.plays, JSON.stringify([...h.keywords]), h.confidence,
-          JSON.stringify(h.reasons), now,
-        );
-        accounts.add(`${post.platform}:${post.accountUid}`);
+      for (const { post } of hits.values()) {
+        const r = resolved.get(`${post.platform}:${post.accountUid}`); // 先按旧 ID 查，再改写
+        if (!r) continue;
+        post.accountUid = r.uid;
+        if (r.name) post.accountName = r.name;
+        if (r.url !== undefined) post.accountUrl = r.url;
       }
-      d.exec("COMMIT");
-    } catch (e) {
-      d.exec("ROLLBACK");
-      throw e;
+      setProgress(taskId, p);
+      const followers = new Map<string, number | null>();
+      for (const { post } of hits.values()) {
+        const k = `${post.platform}:${post.accountUid}`;
+        if (post.followers != null) followers.set(k, post.followers);
+        else if (!followers.has(k)) followers.set(k, null);
+      }
+      for (const [k, v] of followers) {
+        if (v !== null) continue;
+        checkCancel();
+        const i = k.indexOf(":");
+        const platform = k.slice(0, i) as TaskConfig["platforms"][number];
+        const fn = PLATFORMS[platform]?.followers;
+        if (fn) {
+          const count = await enrich("补充粉丝数", () => fn(k.slice(i + 1), taskId));
+          if (count === undefined) break;
+          followers.set(k, count);
+          p.calls = (p.calls ?? 0) + 1;
+        }
+      }
+
+      const now = Date.now();
+      const upAcc = d.prepare(
+        `INSERT INTO accounts(platform, uid, name, profile_url, followers, updated_at) VALUES (?,?,?,?,?,?)
+         ON CONFLICT(platform, uid) DO UPDATE SET name=excluded.name, profile_url=excluded.profile_url,
+           followers=COALESCE(excluded.followers, accounts.followers), updated_at=excluded.updated_at`,
+      );
+      const upPost = d.prepare(
+        `INSERT OR REPLACE INTO promo_posts(platform, post_id, task_id, scope, account_uid, url, title, published_at,
+           likes, comments, plays, keywords, confidence, reasons, crawled_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      );
+      d.exec("BEGIN");
+      try {
+        for (const h of hits.values()) {
+          const { post } = h;
+          const f = followers.get(`${post.platform}:${post.accountUid}`) ?? null;
+          if (cfg.followers) {
+            // 粉丝数未知时保留（宁可多不漏），由 UI 显示"未知"
+            if (f != null && cfg.followers.min != null && f < cfg.followers.min) continue;
+            if (f != null && cfg.followers.max != null && f > cfg.followers.max) continue;
+          }
+          if (!PLATFORMS[post.platform].noEngagement) {
+            if (cfg.engagement?.minLikes != null && post.likes < cfg.engagement.minLikes) continue;
+            if (cfg.engagement?.minComments != null && post.comments < cfg.engagement.minComments) continue;
+          }
+          upAcc.run(post.platform, post.accountUid, post.accountName, post.accountUrl, f, now);
+          upPost.run(
+            post.platform, post.postId, taskId, row.scope, post.accountUid, post.url, post.title, post.publishedAt,
+            post.likes, post.comments, post.plays, JSON.stringify([...h.keywords]), h.confidence,
+            JSON.stringify(h.reasons), now,
+          );
+          accounts.add(`${post.platform}:${post.accountUid}`);
+        }
+        d.exec("COMMIT");
+      } catch (e) {
+        d.exec("ROLLBACK");
+        throw e;
+      }
+
+      p.accounts = accounts.size;
+      setProgress(taskId, p);
+      if (pause) break;
     }
 
     // 相对该 scope 历史：新增账号 / 新晋复投
@@ -214,13 +264,16 @@ export async function runTask(taskId: number): Promise<void> {
     p.repeatAccounts = [...accounts].filter((k) => (after.get(k) ?? 0) >= n).length;
     p.stage = "done";
     p.accounts = accounts.size;
-    if (budgetPause) p.note = budgetPause.message;
+    const platformError = platformErrors.join("；");
+    const taskError = [pause?.message, platformError].filter(Boolean).join("；") || null;
+    if (taskError) p.note = taskError;
+    const status = pause instanceof BudgetExceededError ? "paused_budget" : pause ? "paused_circuit" : platformError ? "failed" : "done";
     d.prepare("UPDATE tasks SET status=?, error=?, progress=?, finished_at=? WHERE id=?")
-      .run(budgetPause ? "paused_budget" : "done", budgetPause?.message ?? null, JSON.stringify(p), Date.now(), taskId);
+      .run(status, taskError, JSON.stringify(p), Date.now(), taskId);
 
     const label = row.name || `任务 #${taskId}`;
-    if (budgetPause) {
-      addAlert("task_failed", `「${label}」预算已用完，已保存当前结果`, budgetPause.message, `/tasks/${taskId}`);
+    if (taskError) {
+      addAlert("task_failed", `「${label}」抓取未完成，已保存当前结果`, taskError, `/tasks/${taskId}`);
       return;
     }
     addAlert("task_done", `「${label}」抓取完成`, `命中 ${accounts.size} 个账号，其中新增 ${p.newAccounts} 个`, `/tasks/${taskId}`);

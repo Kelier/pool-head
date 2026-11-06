@@ -209,6 +209,11 @@ select { appearance: none; padding-right: 28px; background-image: url("data:imag
 .tablewrap > table { min-width: 640px; }
 table { border-collapse: collapse; width: 100%; font-size: 13px; }
 th { position: sticky; top: 0; text-align: left; padding: 10px 14px; font-size: 12px; font-weight: 600; color: var(--text-2); background: var(--surface-2); border-bottom: 1px solid var(--line); white-space: nowrap; user-select: none; }
+.task-posts-table { table-layout: fixed; }
+.task-posts-table .post-platform { width: 90px; white-space: nowrap; }
+.task-posts-table .post-author { width: 25%; }
+.task-posts-table .post-date { width: 145px; white-space: nowrap; }
+.task-posts-table .post-preview { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 th.sortable { cursor: pointer; }
 th.sortable:hover { color: var(--text); }
 th.r, td.r { text-align: right; }

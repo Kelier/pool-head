@@ -38,8 +38,18 @@ describe("TikHubClient", () => {
     let n = 0;
     const c = new TikHubClient(cfg, { clock, fetch: (async () => (n++, res(401))) as typeof fetch });
     await expect(c.request(req)).rejects.toBeInstanceOf(TikHubError);
-    await expect(c.request({ ...req, path: "/q" })).rejects.toBeInstanceOf(CircuitOpenError);
+    await expect(c.request({ ...req, path: "/q", platform: "xiaohongshu" })).rejects.toBeInstanceOf(CircuitOpenError);
     expect(n).toBe(1);
+  });
+
+  it("单平台连续 500 触发熔断，其他平台仍可请求", async () => {
+    const c = new TikHubClient(cfg, {
+      clock,
+      fetch: async (url) => res(String(url).endsWith("/other") ? 200 : 500),
+    });
+    await expect(c.request(req)).rejects.toBeInstanceOf(TikHubError);
+    await expect(c.request(req)).rejects.toBeInstanceOf(CircuitOpenError);
+    await expect(c.request({ ...req, path: "/other", platform: "xiaohongshu" })).resolves.toEqual({ ok: 1 });
   });
 
   it("400 不重试", async () => {

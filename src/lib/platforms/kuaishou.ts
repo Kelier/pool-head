@@ -1,3 +1,4 @@
+import type { SearchOptions } from "./index";
 import { tikhub, BudgetExceededError } from "../tikhub/client";
 import { CircuitOpenError } from "../tikhub/limiter";
 import type { NormPost, SearchPage } from "../types";
@@ -50,6 +51,7 @@ export async function searchKuaishou(
   days: number,
   next: Record<string, string | number> | null,
   taskId: number,
+  options?: SearchOptions,
 ): Promise<SearchPage> {
   const res = await tikhub().request({
     method: "GET",
@@ -57,6 +59,7 @@ export async function searchKuaishou(
     platform: "kuaishou",
     taskId,
     ttlMs: 60 * 60_000,
+    bypassCache: options?.refresh,
     query: {
       keyword,
       sort_type: "newest",

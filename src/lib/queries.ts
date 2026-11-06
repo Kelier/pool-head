@@ -68,6 +68,22 @@ function source(s: Scope, opts: { rejected: boolean } = { rejected: false }): { 
   return { sql: `SELECT p.* FROM promo_posts p WHERE ${where}${rej}`, args };
 }
 
+export type TaskPostRow = {
+  platform: string; postId: string; title: string; url: string; author: string; publishedAt: number;
+};
+
+/** 按发布时间分页读取任务已入库的作品，排除人工否决的内容。 */
+export function taskPosts(taskId: number, page: number, pageSize: number): TaskPostRow[] {
+  const { sql, args } = source({ taskId });
+  return db().prepare(`
+    SELECT p.platform, p.post_id AS postId, p.title, p.url, COALESCE(NULLIF(a.name, ''), p.account_uid) AS author,
+      p.published_at AS publishedAt
+    FROM (${sql}) p LEFT JOIN accounts a ON a.platform = p.platform AND a.uid = p.account_uid
+    ORDER BY p.published_at DESC, p.platform, p.post_id
+    LIMIT ? OFFSET ?
+  `).all(...args, pageSize, (page - 1) * pageSize) as TaskPostRow[];
+}
+
 /* ───────── 账号聚合 ───────── */
 export type AccountFilter = Scope & {
   platform?: string; q?: string; tier?: Tier; status?: string; tag?: string;

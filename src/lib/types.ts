@@ -17,6 +17,8 @@ export type TaskConfig = {
   repeatThreshold: number;
   /** 每个平台 × 关键词的可选翻页限制，留空时自动翻页。 */
   maxPages?: number;
+  /** 每个平台最多检查的搜索内容条数，平台内所有关键词共享。 */
+  maxPosts?: number;
   /** 判定为"投放内容"的最低置信度 */
   minConfidence: number;
 };
@@ -58,9 +60,11 @@ export type Progress = {
   stage?: string;
   calls?: number;
   postsSeen?: number;
+  postsSeenByPlatform?: Partial<Record<Platform, number>>;
   postsMatched?: number;
   accounts?: number;
   note?: string;
+  platformErrors?: string[];
   newAccounts?: number;
   newRepeat?: number;
   repeatAccounts?: number;

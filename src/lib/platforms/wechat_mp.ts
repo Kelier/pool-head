@@ -1,3 +1,4 @@
+import type { SearchOptions } from "./index";
 // 公众号：搜一搜「文章」垂类 → 文章。
 //
 // · 账号 ID 用文章链接里的 __biz（同一公众号恒定）。搜索结果里没有 gh_ 用户名，也没有头像。
@@ -45,11 +46,11 @@ export function parseMpSearch(res: any): SearchPage {
   return { posts, ...pageInfo(res, posts.length) };
 }
 
-export async function searchWechatMp(keyword: string, days: number, next: Record<string, string | number> | null, taskId: number): Promise<SearchPage> {
+export async function searchWechatMp(keyword: string, days: number, next: Record<string, string | number> | null, taskId: number, options?: SearchOptions): Promise<SearchPage> {
   const res = await wechatSearch(
     "/api/v1/wechat_search/v2/fetch_search",
     { keyword: keyword.slice(0, 100), business_type: "article", sort: "latest", publish_time: wechatPublishTime(days), ...(next?.cursor ? { cursor: String(next.cursor) } : {}) },
-    "wechat_mp", taskId,
+    "wechat_mp", taskId, options?.refresh,
   );
   return res ? parseMpSearch(res) : { posts: [], hasMore: false, next: {} };
 }

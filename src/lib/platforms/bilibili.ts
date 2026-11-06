@@ -1,3 +1,4 @@
+import type { SearchOptions } from "./index";
 import { tikhub, BudgetExceededError } from "../tikhub/client";
 import { CircuitOpenError } from "../tikhub/limiter";
 import type { NormPost, SearchPage } from "../types";
@@ -52,7 +53,7 @@ export async function searchBilibili(
   days: number,
   next: Record<string, string | number> | null,
   taskId: number,
-  range?: { from: number; to: number },
+  range?: SearchOptions,
 ): Promise<SearchPage> {
   // 整个任务复用同一时间窗口，绝对日期相同的任务也可复用缓存。
   const { begin, end } = range
@@ -64,6 +65,7 @@ export async function searchBilibili(
     platform: "bilibili",
     taskId,
     ttlMs: 60 * 60_000,
+    bypassCache: range?.refresh,
     query: {
       keyword,
       order: "pubdate", // 最新发布

@@ -2,6 +2,7 @@
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
+import { RerunTaskModal } from "@/components/RerunTaskModal";
 import { AccountDrawer } from "@/components/AccountDrawer";
 import { AccountTable, type SortState } from "@/components/AccountTable";
 import { Donut, LineChart } from "@/components/charts";
@@ -9,18 +10,19 @@ import { ExportMenu } from "@/components/ExportMenu";
 import { Badge, Empty, Icon, Kpi, Modal, PageHead, Pager, Seg, Skeleton, StatusBadge, Swatch } from "@/components/ui";
 import { PLATFORM_LIST, PLATFORM_NAME, SOURCE_LABEL, TIER_COLOR, TIER_LABEL } from "@/lib/consts";
 import { fmtDateTime, fmtNum, qs } from "@/lib/format";
-import type { AccountRow } from "@/lib/queries";
+import type { AccountRow, TaskPostRow } from "@/lib/queries";
 import { api, toast, useApi } from "@/lib/useApi";
 import { durationText, isLive, platformText, rangeText, taskTitle, type TaskT } from "../_parts";
 
 type Summary = { accounts: number; repeat: number; posts: number; newThisWeek: number; repeatRate: number; tiers: Record<string, number> };
 type Resp = {
   task: TaskT; summary: Summary; trend: { weeks: number[]; series: Record<string, number[]> };
+  posts: TaskPostRow[]; postsPage: number; postsPageSize: number;
   total: number; rows: AccountRow[]; page: number; pageSize: number;
 };
 
 const PROBLEM: Record<string, string> = {
-  failed: "任务执行失败", paused_budget: "已达今日 API 调用预算，任务已暂停", paused_circuit: "TikHub 连续失败，已触发熔断保护",
+  failed: "任务执行未完成", paused_budget: "已达今日 API 调用预算，任务已暂停", paused_circuit: "TikHub 连续失败，已触发熔断保护",
   interrupted: "服务重启导致任务中断", cancelled: "任务已被取消",
 };
 
@@ -34,9 +36,11 @@ export default function TaskDetailPage() {
   const [q, setQ] = useState("");
   const [sort, setSort] = useState<SortState>({ sort: "count", dir: "desc" });
   const [page, setPage] = useState(1);
+  const [postsPage, setPostsPage] = useState(1);
   const [open, setOpen] = useState<{ platform: string; uid: string } | null>(null);
   const [confirmDel, setConfirmDel] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [rerunning, setRerunning] = useState(false);
 
   useEffect(() => {
     const t = setTimeout(() => { setQ(qInput); setPage(1); }, 300);
@@ -45,7 +49,7 @@ export default function TaskDetailPage() {
 
   const filter = { repeat: repeatOnly, platform, tier, q };
   const { data, error, reload } = useApi<Resp>(
-    `/api/tasks/${id}${qs({ ...filter, sort: sort.sort, dir: sort.dir, page, pageSize: 20 })}`,
+    `/api/tasks/${id}${qs({ ...filter, sort: sort.sort, dir: sort.dir, page, pageSize: 20, postsPage })}`,
     (d) => (d && isLive(d.task.status) ? 2500 : false),
   );
 
@@ -54,17 +58,13 @@ export default function TaskDetailPage() {
     setPage(1);
   };
 
-  async function act(action: "rerun" | "cancel") {
+  /** 请求取消正在执行的任务。 */
+  async function cancel() {
     setBusy(true);
     try {
-      const r = await api<{ id?: number }>(`/api/tasks/${id}/action`, "POST", { action });
-      if (action === "rerun" && r.id) {
-        toast(`已创建重跑任务 #${r.id}`);
-        router.push(`/tasks/${r.id}`);
-      } else {
-        toast("已请求取消");
-        await reload();
-      }
+      await api(`/api/tasks/${id}/action`, "POST", { action: "cancel" });
+      toast("已请求取消");
+      await reload();
     } catch (e) {
       toast((e as Error).message, "err");
     } finally {
@@ -122,8 +122,8 @@ export default function TaskDetailPage() {
         actions={
           <>
             {live
-              ? <button className="btn ghost" disabled={busy} onClick={() => act("cancel")}>取消任务</button>
-              : <button className="btn ghost" disabled={busy} onClick={() => act("rerun")}><Icon name="refresh" />重跑</button>}
+              ? <button className="btn ghost" disabled={busy} onClick={cancel}>取消任务</button>
+              : <button className="btn ghost" disabled={busy} onClick={() => setRerunning(true)}><Icon name="refresh" />重跑</button>}
             <ExportMenu query={exportQuery} />
             <button className="btn danger" onClick={() => setConfirmDel(true)}><Icon name="trash" />删除</button>
           </>
@@ -133,8 +133,14 @@ export default function TaskDetailPage() {
       <div className="stack" style={{ gridTemplateColumns: "minmax(0,1fr)" }}>
         {PROBLEM[task.status] && task.status !== "cancelled" && (
           <div className="alert" style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
-            <span><b>{PROBLEM[task.status]}</b>{task.error && `：${task.error}`}。已抓到的数据仍可查看，调整后可重跑（1 小时内的请求会命中缓存，不重复计费）。</span>
-            <button className="btn sm" style={{ marginLeft: "auto" }} disabled={busy} onClick={() => act("rerun")}>重跑任务</button>
+            <span><b>{PROBLEM[task.status]}</b>{task.error && `：${task.error}`}。{summary.posts > 0 ? `下方可查看已保存的 ${summary.posts} 条作品。` : "本次任务没有可显示的已保存作品。"}</span>
+            <button className="btn sm" style={{ marginLeft: "auto" }} disabled={busy} onClick={() => setRerunning(true)}>重跑任务</button>
+          </div>
+        )}
+        {live && !!p.platformErrors?.length && (
+          <div className="alert">
+            <b>部分平台出现错误，任务继续运行</b>
+            <ul>{p.platformErrors.map((failure) => <li key={failure}>{failure}</li>)}</ul>
           </div>
         )}
         {task.status === "cancelled" && <div className="notice">任务已取消，以下为取消前已入库的数据。</div>}
@@ -156,7 +162,7 @@ export default function TaskDetailPage() {
                   </>
                 )}
               </dd>
-              <dt>判定口径</dt><dd>复投阈值 ≥ {cfg.repeatThreshold} 次 · 最低置信度 {cfg.minConfidence} · {cfg.maxPages ? `每组最多 ${cfg.maxPages} 页` : "自动翻页"}</dd>
+              <dt>判定口径</dt><dd>复投阈值 ≥ {cfg.repeatThreshold} 次 · 最低置信度 {cfg.minConfidence} · {cfg.maxPosts ? `${p.postsSeenByPlatform ? "每个平台" : "任务"}最多浏览 ${cfg.maxPosts} 条` : cfg.maxPages ? `每组最多 ${cfg.maxPages} 页` : "自动翻页"}</dd>
             </dl>
           </section>
 
@@ -172,7 +178,12 @@ export default function TaskDetailPage() {
             </div>
             <dl className="kv" style={{ gridTemplateColumns: "88px 1fr" }}>
               <dt>API 调用</dt><dd className="num">{p.calls ?? 0} 次</dd>
-              <dt>浏览内容</dt><dd className="num">{p.postsSeen ?? 0} 条</dd>
+              <dt>浏览内容</dt><dd className="num">
+                {p.postsSeen ?? 0} 条
+                {p.postsSeenByPlatform && cfg.platforms.length > 1 && (
+                  <div className="hint">{cfg.platforms.map((platform) => `${PLATFORM_NAME[platform]} ${p.postsSeenByPlatform?.[platform] ?? 0} 条`).join(" · ")}</div>
+                )}
+              </dd>
               <dt>命中作品</dt><dd className="num">{p.postsMatched ?? 0} 条</dd>
               {task.finishedAt && <><dt>完成于</dt><dd>{fmtDateTime(task.finishedAt)}</dd></>}
             </dl>
@@ -180,7 +191,7 @@ export default function TaskDetailPage() {
         </div>
 
         <div className="grid cols-4" style={{ gridTemplateColumns: "repeat(5, minmax(0,1fr))" }}>
-          <Kpi label="浏览内容" value={fmtNum(p.postsSeen ?? 0)} sub="搜索返回的全部内容" icon="search" />
+          <Kpi label="浏览内容" value={fmtNum(p.postsSeen ?? 0)} sub="本次检查过的搜索内容" icon="search" />
           <Kpi label="命中作品" value={fmtNum(summary.posts)} sub="已扣除人工否决" icon="file" />
           <Kpi label="投放账号" value={fmtNum(summary.accounts)} icon="users" />
           <Kpi label="新增账号" value={p.newAccounts ?? "—"} sub="相对该竞品历史" icon="plus" />
@@ -204,6 +215,32 @@ export default function TaskDetailPage() {
             </section>
           </div>
         )}
+
+        <section className="card">
+          <div className="card-head"><h2>命中作品（{summary.posts}）</h2></div>
+          {data.posts.length ? (
+            <div className="tablewrap">
+              <table className="task-posts-table">
+                <thead><tr><th>作品</th><th className="post-platform">平台</th><th className="post-author">账号</th><th className="post-date">发布时间</th></tr></thead>
+                <tbody>
+                  {data.posts.map((post) => (
+                    <tr key={`${post.platform}:${post.postId}`}>
+                      <td>{/^https?:\/\//i.test(post.url)
+                        ? <a className="post-preview" title={post.title} href={post.url} target="_blank" rel="noreferrer">{post.title || "打开原作品"}</a>
+                        : <span className="post-preview" title={post.title}>{post.title || "无标题"}</span>}</td>
+                      <td className="post-platform">{PLATFORM_NAME[post.platform] ?? post.platform}</td>
+                      <td><span className="post-preview" title={post.author}>{post.author}</span></td>
+                      <td className="post-date">{fmtDateTime(post.publishedAt)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <Empty title={live ? "正在抓取，入库后会显示作品" : "本次任务没有可显示的作品"} />
+          )}
+          <Pager page={data.postsPage} pageSize={data.postsPageSize} total={summary.posts} onPage={setPostsPage} />
+        </section>
 
         <section className="card">
           <div className="card-head">
@@ -238,6 +275,8 @@ export default function TaskDetailPage() {
       </div>
 
       {open && <AccountDrawer platform={open.platform} uid={open.uid} onClose={() => setOpen(null)} onChanged={reload} />}
+      {rerunning && <RerunTaskModal taskId={task.id} maxPosts={cfg.maxPosts} onClose={() => setRerunning(false)}
+        onCreated={(newId) => { setRerunning(false); toast(`已创建重跑任务 #${newId}`); router.push(`/tasks/${newId}`); }} />}
       {confirmDel && (
         <Modal
           title="删除任务"

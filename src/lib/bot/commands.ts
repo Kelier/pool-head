@@ -20,13 +20,6 @@ const TASK_STATUS: Record<string, string> = {
 /** 去掉飞书 @ 占位符（@_user_1）与多余空白。 */
 export const cleanText = (text: string) => text.replace(/@_user_\d+/g, " ").replace(/<at[^>]*>.*?<\/at>/g, " ").replace(/\s+/g, " ").trim();
 
-export function parseCommand(text: string): { name: string; args: string[] } | null {
-  const t = cleanText(text);
-  if (!t) return null;
-  const [name, ...args] = t.replace(/^\/+/, "").split(" ");
-  return { name: name.toLowerCase(), args };
-}
-
 /** 支持「近30天 / 30天 / 30 / 一周 / 一月 / 半年」。 */
 export function parseDays(arg?: string): number | null {
   if (!arg) return null;
@@ -65,7 +58,6 @@ const COMMANDS: Command[] = [
         "• 把 LibTV 的监测报告导出成 Excel",
         "• 接着问就行：“那它的新增呢？”",
         ...(ctx.role === "admin" ? ["**管理员还可以说**：", "• 抓取 LibTV 近 30 天 · 新增竞品 xxx · 给 LibTV 加监测词 xxx · 把 xxx 标记为重点关注", "• 开启周报，每周一 9 点（先在群里发“订阅”）", "（修改类操作我会先复述一遍，等你回复「确认」才执行）"] : []),
-        "**指令速查**（等价的固定写法）：" + COMMANDS.filter((c) => ctx.role === "admin" || c.role === "member").map((c) => c.usage).join(" · "),
       ], { note: ctx.role === "admin" ? "你是管理员：可发起抓取与修改" : "你是成员：只读查询与导出" }),
     }),
   },
@@ -249,34 +241,14 @@ const COMMANDS: Command[] = [
   },
 ];
 
-export const ALL_COMMANDS = COMMANDS;
+const findCommand = (name: string) => COMMANDS.find((c) => c.names.includes(name.toLowerCase()));
 
-/**
- * 预留：自然语言入口。默认不启用；配置后可把「帮我看看 libtv 最近有没有新账号」解析成 { name, args }。
- * 典型实现是调用 LLM 做意图分类，再回到下面的 dispatch，权限与限流不变。
- */
-export type IntentResolver = (text: string, ctx: BotCtx) => Promise<{ name: string; args: string[] } | null>;
-
-export const findCommand = (name: string) => COMMANDS.find((c) => c.names.includes(name.toLowerCase()));
-
-/** 直接按名称+参数执行指令（含角色校验）。文本指令与意图层共用同一入口，权限判断只此一处。 */
+/** 在意图工具内按名称和参数调用业务处理器，并校验角色。 */
 export async function runCommand(name: string, args: string[], ctx: BotCtx): Promise<Reply> {
   const cmd = findCommand(name);
   if (!cmd) return { text: `没有「${trunc(name, 12)}」这个指令。` };
   if (cmd.role === "admin" && ctx.role !== "admin") return { text: `「${cmd.names[0]}」仅管理员可用（它会消耗 TikHub 调用）。` };
   return cmd.run(args, ctx);
-}
-
-export async function dispatch(text: string, ctx: BotCtx, resolve?: IntentResolver): Promise<Reply> {
-  let parsed = parseCommand(text);
-  if (!parsed) return { text: "发送「帮助」查看可用指令。" };
-  let cmd = COMMANDS.find((c) => c.names.includes(parsed!.name));
-  if (!cmd && resolve) {
-    const r = await resolve(text, ctx);
-    if (r) { parsed = r; cmd = COMMANDS.find((c) => c.names.includes(r.name)); }
-  }
-  if (!cmd) return { text: `没听懂「${trunc(parsed.name, 12)}」。发送「帮助」查看可用指令。` };
-  return runCommand(cmd.names[0], parsed.args, ctx);
 }
 
 export { link };

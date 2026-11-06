@@ -5,6 +5,14 @@ import { PLATFORM_IDS } from "./platforms";
 
 const PLATFORMS: Platform[] = PLATFORM_IDS;
 
+/** 校验浏览条数上限。留空表示自动抓取。 */
+export function parseMaxPosts(value: unknown): number | undefined {
+  if (value == null || value === "") return undefined;
+  const count = typeof value === "string" || typeof value === "number" ? Number(value) : NaN;
+  if (!Number.isSafeInteger(count) || count < 1) throw new Error("浏览条数须为正整数");
+  return count;
+}
+
 /** 校验并补默认值；非法输入抛 Error(message)。 */
 export function parseTaskConfig(raw: any): TaskConfig { // eslint-disable-line @typescript-eslint/no-explicit-any
   const platforms = (raw?.platforms ?? []).filter((p: string) => PLATFORMS.includes(p as Platform));
@@ -38,6 +46,7 @@ export function parseTaskConfig(raw: any): TaskConfig { // eslint-disable-line @
     engagement: raw?.engagement ? { minLikes: opt(raw.engagement.minLikes), minComments: opt(raw.engagement.minComments) } : undefined,
     repeatThreshold: int(raw?.repeatThreshold, DEFAULT_CONFIG.repeatThreshold, 2, 50),
     maxPages: raw?.maxPages == null || raw.maxPages === "" ? undefined : Math.floor(int(raw.maxPages, 1, 1, MAX_SEARCH_PAGES)),
+    maxPosts: parseMaxPosts(raw?.maxPosts),
     minConfidence: int(raw?.minConfidence, DEFAULT_CONFIG.minConfidence, 0, 1),
   };
 }

@@ -12,7 +12,7 @@ import { describeCrawlDraft, fillCrawlDraft, type CrawlDraft } from "./crawl-dra
 import { parseCrawlDates } from "./crawl-time";
 import { crawlIntent, isWriteIntent, ruleIntent, wantsAnalysis } from "./rules";
 import { loadSession, saveTurn, __resetSessions } from "./session";
-import { describeCall, toolByName, type Plan } from "./tools";
+import { describeCall, toolByName, type IntentChoice, type Plan } from "./tools";
 
 type Env = Record<string, string | undefined>;
 
@@ -31,11 +31,14 @@ export const __resetAgentState = () => { __resetPending(); __resetSessions(); };
 export const hasPending = (ctx: BotCtx): boolean => hasPendingAction(ctx);
 
 /** 判断会话是否还有待补充的抓取请求。 */
-export const hasCrawlDraft = (ctx: BotCtx): boolean => Boolean(loadSession(ctx).last.crawlDraft);
+export function hasIntentDraft(ctx: BotCtx): boolean {
+  const { crawlDraft, choices } = loadSession(ctx).last;
+  return Boolean(crawlDraft || (choices && choices.expires > Date.now()));
+}
 
 export function cancelPending(ctx: BotCtx): Reply {
   takePending(ctx);
-  if (loadSession(ctx).last.crawlDraft) saveTurn(ctx, "取消", "已取消抓取草稿", { crawlDraft: null });
+  if (hasIntentDraft(ctx)) saveTurn(ctx, "取消", "已取消待补充的请求", { crawlDraft: null, choices: null });
   return { text: "已取消。" };
 }
 
@@ -63,6 +66,13 @@ function confirmationText(summary: string): string {
   return `${summary}\n回复「确认」执行，「取消」放弃（5 分钟内有效）。`;
 }
 
+const CHOICE_TTL = 5 * 60_000;
+
+/** 用普通文本给出候选意图，避免依赖飞书卡片回调。 */
+function choicePrompt(choices: IntentChoice[], question: string): string {
+  return [question, ...choices.map((choice, index) => `${index + 1}. ${choice.label}`), "回复编号选择，或重新描述你的需求。"].join("\n");
+}
+
 const LONG = 40; // 超过这个长度的句子规则吃不准，直接交给大模型（若已配置）
 
 export async function handleNaturalLanguage(text: string, ctx: BotCtx, deps: AgentDeps = {}): Promise<NLResult> {
@@ -71,20 +81,38 @@ export async function handleNaturalLanguage(text: string, ctx: BotCtx, deps: Age
   if (mode === "off") return null;
   const ready = mode === "llm" && llmConfigured(env);
 
+  const session = loadSession(ctx);
+  const options = session.last.choices;
+  const selection = /^(?:选(?:第)?\s*)?([1-9])(?:\s*[项个])?[。.]?$/.exec(text.trim().normalize("NFKC"));
+  let selected: Plan | undefined;
+  if (selection) {
+    if (!options || options.expires <= Date.now()) {
+      return { replies: [{ text: "没有有效的候选项，请重新描述你的需求。" }], source: "rules" };
+    }
+    const choice = options.items[Number(selection[1]) - 1];
+    if (!choice) return { replies: [{ text: choicePrompt(options.items, "这个编号不在候选项里。") }], source: "rules" };
+    saveTurn(ctx, text, choice.label, { choices: null });
+    if ("web" in choice) {
+      return { replies: [{ text: `用关键词「${choice.keyword}」新建独立抓取任务，请在网页操作：${ctx.baseUrl.replace(/\/$/, "")}/tasks` }], source: "rules" };
+    }
+    selected = { calls: [choice.call], source: "rules" };
+  } else if (options) {
+    saveTurn(ctx, text, "改用新的请求", { choices: null });
+  }
+
   const write = isWriteIntent(text);
   if (write && !ready) {
     return { replies: [{ text: "新增竞品、改监测词、标记账号这类操作需要开启智能模式（BOT_AGENT=llm 并配置大模型），目前请先在控制台操作。" }], source: "rules" };
   }
 
   const catalog = listCompetitors();
-  const session = loadSession(ctx);
   const last = catalog.find((c) => c.name === session.last.competitor)?.name;
 
   const priorDraft = ctx.role === "admin" ? session.last.crawlDraft : undefined;
   let draft = priorDraft ? fillCrawlDraft(text, priorDraft) : undefined;
   const now = deps.today ? new Date(deps.today()) : undefined;
   const crawl = !write ? crawlIntent(text, catalog, last, now) : null;
-  let plan = crawl;
+  let plan = selected ?? crawl;
   if (crawl?.clarify && ctx.role === "admin") takePending(ctx);
   if (!draft && plan?.crawlDraft) {
     const incoming = plan.crawlDraft;
@@ -109,13 +137,21 @@ export async function handleNaturalLanguage(text: string, ctx: BotCtx, deps: Age
   if (!plan && !write && !(ready && text.length > LONG)) { plan = ruleIntent(text, catalog, { last }); triedRules = true; }
   // 缺目标或有歧义时，允许模型结合上下文补充理解，失败时保留原追问。
   const dates = crawl?.clarify ? parseCrawlDates(text, now) : undefined;
-  const canRefine = plan?.clarify && (!crawl || plan.clarify.startsWith("抓取哪个竞品")) && !dates?.error && !dates?.range;
+  const canRefine = !plan?.choices?.length && plan?.clarify && (!crawl || plan.clarify.startsWith("抓取哪个竞品")) && !dates?.error && !dates?.range;
   if (ready && (!plan || (canRefine && ctx.role === "admin"))) {
     await deps.progress?.step("🤔 正在理解你的问题…");
     plan = (await llmPlan(text, catalog, ctx.role === "admin" ? "admin" : "member", { ...deps, env, userId: ctx.userId, session })) ?? plan;
   }
   if (!plan && !write && !triedRules) plan = ruleIntent(text, catalog, { last }); // 长句交给模型却没拿到结果：回落到规则
   if (!plan) return null;
+  if (plan.choices?.length) {
+    const allowed = plan.choices.filter((choice) => "web" in choice || toolByName(choice.call.tool)?.role !== "admin" || ctx.role === "admin");
+    if (!allowed.length) return { replies: [{ text: DENY(true) }], source: plan.source };
+    // 选项和旧确认不能同时生效，避免用户回复「确认」时启动上一项操作。
+    takePending(ctx);
+    saveTurn(ctx, text, "等待选择", { choices: { items: allowed, expires: Date.now() + CHOICE_TTL } });
+    return { replies: [{ text: choicePrompt(allowed, plan.clarify ?? "你想做哪件事？") }], source: plan.source };
+  }
   if (plan.clarify) return { replies: [{ text: plan.clarify }], source: plan.source };
 
   // 规则能认出"要什么数据"，但解读（"为什么/怎么看"）需要模型；这样规则路径只花一次模型调用

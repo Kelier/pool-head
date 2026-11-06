@@ -1,3 +1,4 @@
+import type { SearchOptions } from "./index";
 import { tikhub, BudgetExceededError } from "../tikhub/client";
 import { CircuitOpenError } from "../tikhub/limiter";
 import type { NormPost, SearchPage } from "../types";
@@ -44,11 +45,13 @@ export function parseXhsSearch(res: any): SearchPage {
   };
 }
 
+/** 搜索笔记，后续翻页沿用首次搜索返回的会话。 */
 export async function searchXhs(
   keyword: string,
   days: number,
   next: Record<string, string | number> | null,
   taskId: number,
+  options?: SearchOptions,
 ): Promise<SearchPage> {
   const res = await tikhub().request({
     method: "GET",
@@ -56,6 +59,7 @@ export async function searchXhs(
     platform: "xiaohongshu",
     taskId,
     ttlMs: 60 * 60_000,
+    bypassCache: options?.refresh,
     query: {
       keyword,
       page: next?.page ?? 1,
@@ -66,7 +70,12 @@ export async function searchXhs(
       search_session_id: (next?.search_session_id as string) || undefined,
     },
   });
-  return parseXhsSearch(res);
+  const result = parseXhsSearch(res);
+  if (next && result.hasMore) {
+    result.next.search_id = next.search_id ?? "";
+    result.next.search_session_id = next.search_session_id ?? "";
+  }
+  return result;
 }
 
 /** 补粉丝数：24h 缓存。失败返回 null，不中断任务。 */

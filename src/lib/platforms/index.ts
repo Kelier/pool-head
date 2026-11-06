@@ -6,7 +6,9 @@ import { searchBilibili, getBilibiliFollowers } from "./bilibili";
 import { searchWechatChannels, resolveChannelsAccount, getChannelsFollowers, channelsFansEnabled } from "./wechat_channels";
 import { searchWechatMp } from "./wechat_mp";
 
-export type Searcher = (kw: string, days: number, next: Record<string, string | number> | null, taskId: number, range?: { from: number; to: number }) => Promise<SearchPage>;
+export type SearchOptions = { from: number; to: number; refresh?: boolean };
+
+export type Searcher = (kw: string, days: number, next: Record<string, string | number> | null, taskId: number, options?: SearchOptions) => Promise<SearchPage>;
 export type FollowersFn = (uid: string, taskId: number) => Promise<number | null>;
 
 export type ResolveFn = (post: NormPost, taskId: number) => Promise<{ uid: string; name?: string; url?: string } | null>;

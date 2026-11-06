@@ -3,6 +3,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { Badge, Empty, Icon, Modal, PageHead, Pager, Skeleton, StatusBadge, Swatch } from "@/components/ui";
+import { RerunTaskModal } from "@/components/RerunTaskModal";
 import { NewTaskModal } from "@/components/NewTaskModal";
 import { SOURCE_LABEL, TASK_STATUS } from "@/lib/consts";
 import { fmtDateTime, qs } from "@/lib/format";
@@ -20,6 +21,7 @@ export default function TasksPage() {
   const [page, setPage] = useState(1);
   const [picked, setPicked] = useState<number[]>([]);
   const [creating, setCreating] = useState(false);
+  const [rerunning, setRerunning] = useState<TaskT | null>(null);
   const [del, setDel] = useState<TaskT | null>(null);
   const [busy, setBusy] = useState<number | null>(null);
 
@@ -34,11 +36,11 @@ export default function TasksPage() {
     (d) => (d?.rows.some((r) => isLive(r.status)) ? 3000 : false),
   );
 
-  async function act(t: TaskT, action: "rerun" | "cancel") {
+  async function cancel(t: TaskT) {
     setBusy(t.id);
     try {
-      const r = await api<{ id?: number }>(`/api/tasks/${t.id}/action`, "POST", { action });
-      toast(action === "rerun" ? `已创建重跑任务 #${r.id}` : "已请求取消，将在当前请求结束后停止");
+      await api(`/api/tasks/${t.id}/action`, "POST", { action: "cancel" });
+      toast("已请求取消，将在当前请求结束后停止");
       await reload();
     } catch (e) {
       toast((e as Error).message, "err");
@@ -159,9 +161,9 @@ export default function TasksPage() {
                       <td className="r nowrap" onClick={(e) => e.stopPropagation()}>
                         <span style={{ display: "inline-flex", gap: 6 }}>
                           {live ? (
-                            <button className="btn ghost sm" disabled={busy === t.id} onClick={() => act(t, "cancel")}>取消</button>
+                            <button className="btn ghost sm" disabled={busy === t.id} onClick={() => cancel(t)}>取消</button>
                           ) : (
-                            <button className="btn ghost sm" disabled={busy === t.id} onClick={() => act(t, "rerun")} title="用相同配置重新抓取（1 小时内的请求命中缓存，不重复计费）">
+                            <button className="btn ghost sm" disabled={busy === t.id} onClick={() => setRerunning(t)} title="重新搜索并创建新任务">
                               <Icon name="refresh" size={13} />重跑
                             </button>
                           )}
@@ -184,6 +186,8 @@ export default function TasksPage() {
           onCreated={(id) => { setCreating(false); toast(`任务 #${id} 已创建`); router.push(`/tasks/${id}`); }}
         />
       )}
+      {rerunning && <RerunTaskModal taskId={rerunning.id} maxPosts={rerunning.config.maxPosts} onClose={() => setRerunning(null)}
+        onCreated={(newId) => { setRerunning(null); toast(`已创建重跑任务 #${newId}`); router.push(`/tasks/${newId}`); }} />}
       {del && (
         <Modal
           title="删除任务"

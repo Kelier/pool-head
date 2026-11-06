@@ -12,11 +12,12 @@ import { LineChart } from "@/components/charts";
 import { AccountTable, type SortState } from "@/components/AccountTable";
 import { AccountDrawer } from "@/components/AccountDrawer";
 import { ExportMenu } from "@/components/ExportMenu";
+import { RerunTaskModal } from "@/components/RerunTaskModal";
 import { NewTaskModal } from "@/components/NewTaskModal";
 import { PlatformBars, SCHEDULE_OPTIONS, TierDonut, type ScheduleRow, type Summary } from "../../_dash";
 import { CompetitorModal } from "../_parts";
 
-type TaskRow = { id: number; name: string | null; status: string; source: string; createdAt: number; progress: { accounts?: number; newAccounts?: number; newRepeat?: number } };
+type TaskRow = { id: number; name: string | null; status: string; source: string; createdAt: number; config: { maxPosts?: number }; progress: { accounts?: number; newAccounts?: number; newRepeat?: number } };
 type Detail = {
   competitor: { id: number; name: string; color: string; keywords: string[]; platforms: string[]; note: string | null };
   summary: Summary;
@@ -45,6 +46,7 @@ export default function CompetitorDetailPage() {
   const [open, setOpen] = useState<{ platform: string; uid: string } | null>(null);
   const [editing, setEditing] = useState(false);
   const [running, setRunning] = useState(false);
+  const [rerunning, setRerunning] = useState(false);
 
   const refreshAll = () => { detail.reload(); accounts.reload(); };
   const onSort = (key: string) => { setPage(1); setSort((s) => (s.sort === key ? { sort: key, dir: s.dir === "desc" ? "asc" : "desc" } : { sort: key, dir: "desc" })); };
@@ -80,6 +82,9 @@ export default function CompetitorDetailPage() {
         actions={
           <>
             <button className="btn" onClick={() => setRunning(true)}><Icon name="play" size={14} />立即抓取</button>
+            {lastTask && !["pending", "running"].includes(lastTask.status) && (
+              <button className="btn ghost" onClick={() => setRerunning(true)}><Icon name="refresh" />重跑上次任务</button>
+            )}
             <ExportMenu query={`competitorScope=${c.id}`} />
             <Link href={`/reports/${c.id}`} className="btn ghost" target="_blank"><Icon name="file" />监测报告</Link>
             <button className="btn ghost" onClick={() => setEditing(true)}>编辑</button>
@@ -168,6 +173,8 @@ export default function CompetitorDetailPage() {
 
       {open && <AccountDrawer platform={open.platform} uid={open.uid} onClose={() => setOpen(null)} onChanged={refreshAll} />}
       {editing && <CompetitorModal initial={c} onClose={() => setEditing(false)} onSaved={() => { setEditing(false); refreshAll(); }} />}
+      {rerunning && lastTask && <RerunTaskModal taskId={lastTask.id} maxPosts={lastTask.config.maxPosts} onClose={() => setRerunning(false)}
+        onCreated={(tid) => { setRerunning(false); router.push(`/tasks/${tid}`); }} />}
       {running && <NewTaskModal preset={{ competitorId: c.id, name: c.name, keywords: c.keywords, platforms: c.platforms }} onClose={() => setRunning(false)} onCreated={(tid) => router.push(`/tasks/${tid}`)} />}
     </>
   );

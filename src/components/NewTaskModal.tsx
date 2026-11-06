@@ -1,6 +1,6 @@
 "use client";
 import { useState } from "react";
-import { estimateSearchPages, MAX_SEARCH_PAGES } from "@/lib/search-pages";
+import { estimateSearchPages } from "@/lib/search-pages";
 import { PLATFORM_LIST } from "@/lib/consts";
 import { api } from "@/lib/useApi";
 import { Modal, Seg } from "./ui";
@@ -18,7 +18,7 @@ export function NewTaskModal({ preset, onClose, onCreated }: { preset?: Preset; 
   const [days, setDays] = useState(30);
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
-  const [pageOverride, setPageOverride] = useState<number | null>(null);
+  const [postLimit, setPostLimit] = useState("");
   const [fMin, setFMin] = useState("");
   const [fMax, setFMax] = useState("");
   const [minLikes, setMinLikes] = useState("");
@@ -27,16 +27,18 @@ export function NewTaskModal({ preset, onClose, onCreated }: { preset?: Preset; 
   const [busy, setBusy] = useState(false);
 
   const kws = [...new Set(keywords.split(/[\n,，]/).map((s) => s.trim()).filter(Boolean))];
-  const estimatePages = pageOverride ?? estimateSearchPages(platforms.length, kws.length);
+  const maxPosts = postLimit === "" ? null : Number(postLimit);
+  const invalidPostLimit = maxPosts !== null && (!Number.isSafeInteger(maxPosts) || maxPosts < 1);
+  const estimatePages = estimateSearchPages(platforms.length, kws.length);
   const searchEstimate = platforms.length * kws.length * estimatePages;
-  const estimate = searchEstimate + platforms.filter((p) => NEEDS_ENRICH.has(p)).length * Math.min(100, kws.length * estimatePages * 12);
+  const estimate = searchEstimate + platforms.filter((p) => NEEDS_ENRICH.has(p)).length * Math.min(100, maxPosts ?? Infinity, kws.length * estimatePages * 12);
 
   async function submit() {
     setErr("");
     setBusy(true);
     try {
       const r = await api<{ id: number }>("/api/tasks", "POST", {
-        competitorId: preset?.competitorId, name: preset?.name, platforms, keywords: kws, match, maxPages: pageOverride,
+        competitorId: preset?.competitorId, name: preset?.name, platforms, keywords: kws, match, maxPosts,
         time: mode === "relative" ? { type: "relative", days } : { type: "absolute", from, to },
         followers: fMin || fMax ? { min: fMin, max: fMax } : undefined,
         engagement: minLikes || minComments ? { minLikes, minComments } : undefined,
@@ -55,9 +57,9 @@ export function NewTaskModal({ preset, onClose, onCreated }: { preset?: Preset; 
       onClose={onClose}
       footer={
         <>
-          <span className="hint" style={{ marginRight: "auto", alignSelf: "center" }}>{pageOverride === null ? "自动翻页" : `搜索最多 ${searchEstimate} 次`}，含补资料预算参考约 {estimate} 次</span>
+          <span className="hint" style={{ marginRight: "auto", alignSelf: "center" }}>自动翻页，含补资料预算参考约 {estimate} 次</span>
           <button className="btn ghost" onClick={onClose}>取消</button>
-          <button className="btn" onClick={submit} disabled={busy || !kws.length || !platforms.length || (mode === "absolute" && (!from || !to))}>{busy ? "创建中…" : "开始抓取"}</button>
+          <button className="btn" onClick={submit} disabled={busy || invalidPostLimit || !kws.length || !platforms.length || (mode === "absolute" && (!from || !to))}>{busy ? "创建中…" : "开始抓取"}</button>
         </>
       }
     >
@@ -86,6 +88,11 @@ export function NewTaskModal({ preset, onClose, onCreated }: { preset?: Preset; 
           <div className="row2"><input type="date" value={from} onChange={(e) => setFrom(e.target.value)} /><input type="date" value={to} onChange={(e) => setTo(e.target.value)} /></div>
         )}
       </div>
+      <div className="field">
+        <label htmlFor="nt-max-posts">每个平台最多浏览（条）</label>
+        <input id="nt-max-posts" type="number" min={1} step={1} placeholder="留空自动停止" value={postLimit} onChange={(e) => setPostLimit(e.target.value)} />
+        <span className="hint">每个平台独立计数，平台内关键词合计，包含过期及未命中的内容。</span>
+      </div>
       <details>
         <summary style={{ cursor: "pointer", fontWeight: 600, marginBottom: 12 }}>高级过滤（可选）</summary>
         <div className="row2">
@@ -93,10 +100,6 @@ export function NewTaskModal({ preset, onClose, onCreated }: { preset?: Preset; 
           <div className="field"><label>粉丝上限</label><input type="number" value={fMax} onChange={(e) => setFMax(e.target.value)} /></div>
           <div className="field"><label>点赞下限</label><input type="number" value={minLikes} onChange={(e) => setMinLikes(e.target.value)} /></div>
           <div className="field"><label>评论下限</label><input type="number" value={minComments} onChange={(e) => setMinComments(e.target.value)} /></div>
-        </div>
-        <div className="field">
-          <label>每个平台 × 关键词的页数限制（留空自动翻页）</label>
-          <input type="number" min={1} max={MAX_SEARCH_PAGES} placeholder="自动" value={pageOverride ?? ""} onChange={(e) => setPageOverride(e.target.value ? Math.min(MAX_SEARCH_PAGES, Math.max(1, Math.floor(Number(e.target.value)))) : null)} />
         </div>
       </details>
       {err && <div className="alert">{err}</div>}

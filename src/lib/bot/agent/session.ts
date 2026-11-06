@@ -3,12 +3,13 @@
 //
 // 安全：这里只存【用户原话】和【我们自己生成的"理解为…"】，不存模型基于抓取数据写出的解读文字，
 // 也不存任何抓取内容——否则被污染的文本会经历史再次进入带工具的规划提示词。
+import type { IntentChoice } from "./tools";
 import type { CrawlDraft } from "./crawl-draft";
 import { db } from "../../db";
 import type { BotCtx } from "../types";
 
 export type Turn = { u: string; a: string };
-export type Last = { competitor?: string; crawlDraft?: CrawlDraft | null };
+export type Last = { competitor?: string; crawlDraft?: CrawlDraft | null; choices?: { items: IntentChoice[]; expires: number } | null };
 export type Session = { turns: Turn[]; last: Last };
 
 const TTL = 2 * 3_600_000;

@@ -1,3 +1,4 @@
+import type { SearchOptions } from "./index";
 import { tikhub } from "../tikhub/client";
 import type { NormPost, SearchPage } from "../types";
 
@@ -46,6 +47,7 @@ export async function searchDouyin(
   days: number,
   next: Record<string, string | number> | null,
   taskId: number,
+  options?: SearchOptions,
 ): Promise<SearchPage> {
   const res = await tikhub().request({
     method: "POST",
@@ -53,6 +55,7 @@ export async function searchDouyin(
     platform: "douyin",
     taskId,
     ttlMs: 60 * 60_000,
+    bypassCache: options?.refresh,
     body: {
       keyword,
       sort_type: "2", // 最新发布，便于遇到早于起点的内容就停止翻页

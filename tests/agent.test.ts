@@ -367,9 +367,39 @@ describe("接入飞书事件", () => {
     await handleMessageEvent(msg("确认", "ou_member"), deps());
     expect(runs).toHaveLength(0);
   });
-  it("BOT_AGENT=off：自然语言回落为『没听懂』", async () => {
+  it("BOT_AGENT=off：关闭消息处理，不绕回旧指令", async () => {
     await handleMessageEvent(msg("libtv最近有啥新账号"), deps({ env: { ...process.env, BOT_AGENT: "off" } }));
-    expect(sent[0].payload).toContain("没听懂");
+    expect(sent[0].payload).toContain("已关闭");
+  });
+  it("关键词歧义先给选项，编号只在同一会话和用户下生效", async () => {
+    await handleMessageEvent(msg("查关键词小云雀"), deps());
+    expect(sent.at(-1)?.payload).toContain("1. 搜索已入库的账号");
+    expect(sent.at(-1)?.payload).toContain("2. 用这个关键词发起一次新的抓取");
+    await handleMessageEvent(msg("2", "ou_member"), deps());
+    expect(sent.at(-1)?.payload).toContain("没有有效的候选项");
+    await handleMessageEvent(msg("选 2"), deps());
+    expect(sent.at(-1)?.payload).toContain("小云雀");
+    expect(sent.at(-1)?.payload).toContain("/tasks");
+    expect(runs).toHaveLength(0);
+    await handleMessageEvent(msg("2"), deps());
+    expect(sent.at(-1)?.payload).toContain("没有有效的候选项");
+  });
+
+  it("选竞品后保留日期，选项本身不执行抓取", async () => {
+    await handleMessageEvent(msg("抓取 LibTV 和 可灵，近 7 天"), deps());
+    expect(sent.at(-1)?.payload).toContain("2. 抓取 可灵");
+    await handleMessageEvent(msg("选第2项"), deps());
+    expect(sent.at(-1)?.payload).toContain("近 7 天");
+    expect(runs).toHaveLength(0);
+    await handleMessageEvent(msg("确认"), deps());
+    expect(runs).toEqual([{ id: 3, days: 7 }]);
+  });
+
+  it("按关键词新建任务明确指引网页，不会去查询任务列表或抓取竞品", async () => {
+    await handleMessageEvent(msg("新建任务，检测关键词小云雀"), deps());
+    expect(sent).toHaveLength(1);
+    expect(sent[0].payload).toContain("新建独立任务目前请在网页操作");
+    expect(runs).toHaveLength(0);
   });
   it("完全无关的话 → 没听懂并引导帮助", async () => {
     await handleMessageEvent(msg("今天天气真好"), deps());

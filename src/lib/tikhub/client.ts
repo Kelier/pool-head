@@ -91,6 +91,8 @@ export type RequestOpts = {
   platform: string;
   /** 缓存时长；0/缺省 = 不缓存 */
   ttlMs?: number;
+  /** 忽略已有响应，仍写入本次成功结果供后续复用。 */
+  bypassCache?: boolean;
   taskId?: number;
 };
 
@@ -100,7 +102,8 @@ export class TikHubClient {
   private bucket: TokenBucket;
   private global: Semaphore;
   private perPlatform = new Map<string, Semaphore>();
-  private breaker: CircuitBreaker;
+  private accountBreaker: CircuitBreaker;
+  private platformBreakers = new Map<string, CircuitBreaker>();
   private reservedAttempts = 0;
   private inflight = new Map<string, Promise<unknown>>();
   private agent?: import("undici").ProxyAgent;
@@ -112,7 +115,7 @@ export class TikHubClient {
     const clock = deps.clock ?? realClock;
     this.bucket = new TokenBucket(cfg.qps, 1, clock);
     this.global = new Semaphore(cfg.globalConcurrency);
-    this.breaker = new CircuitBreaker(5, 60_000, 60_000, clock);
+    this.accountBreaker = new CircuitBreaker(5, 60_000, 60_000, clock);
   }
 
   private get clock() {
@@ -126,7 +129,7 @@ export class TikHubClient {
 
   async request<T>(o: RequestOpts): Promise<T> {
     const key = cacheKey(o);
-    if (o.ttlMs) {
+    if (o.ttlMs && !o.bypassCache) {
       const hit = db()
         .prepare("SELECT body FROM api_cache WHERE key = ? AND expires_at > ?")
         .get(key, this.clock.now()) as { body: string } | undefined;
@@ -153,11 +156,23 @@ export class TikHubClient {
     return this.global.run(() => this.sem(o.platform).run(() => this.attemptLoop<T>(o, key)));
   }
 
+  /** 平台瞬时故障单独熔断；账号级故障仍由全局熔断器处理。 */
+  private platformBreaker(platform: string): CircuitBreaker {
+    let breaker = this.platformBreakers.get(platform);
+    if (!breaker) {
+      breaker = new CircuitBreaker(5, 60_000, 60_000, this.clock);
+      this.platformBreakers.set(platform, breaker);
+    }
+    return breaker;
+  }
+
   private async attemptLoop<T>(o: RequestOpts, key: string): Promise<T> {
     const rand = this.deps.rand ?? Math.random;
     let lastErr: unknown;
+    const breaker = this.platformBreaker(o.platform);
     for (let attempt = 0; attempt <= this.cfg.maxRetries; attempt++) {
-      this.breaker.check();
+      this.accountBreaker.check();
+      breaker.check();
       const used = this.usedToday();
       if (used >= this.cfg.dailyBudget) throw new BudgetExceededError(used, this.cfg.dailyBudget);
 
@@ -170,6 +185,7 @@ export class TikHubClient {
       if (committed + this.reservedAttempts >= this.cfg.dailyBudget) {
         throw new BudgetExceededError(committed + this.reservedAttempts, this.cfg.dailyBudget);
       }
+      this.accountBreaker.check();
       const t0 = this.clock.now();
       let status = 0;
       try {
@@ -184,7 +200,7 @@ export class TikHubClient {
         }
 
         if (res.ok) {
-          this.breaker.success();
+          breaker.success();
           const json = (await res.json()) as T;
           if (o.ttlMs) {
             db()
@@ -194,13 +210,13 @@ export class TikHubClient {
           return json;
         }
         if (status === 401 || status === 402 || status === 403) {
-          this.breaker.fatal(`HTTP ${status}`); // 鉴权/余额/权限：不重试，暂停全部请求
+          this.accountBreaker.fatal(`HTTP ${status}`); // 鉴权/余额/权限：不重试，暂停全部请求
           throw new TikHubError(`TikHub ${status}：鉴权/余额/权限问题，已熔断`, status);
         }
         if (status !== 429 && status < 500) {
           throw new TikHubError(`TikHub ${status}：${(await res.text()).slice(0, 200)}`, status);
         }
-        this.breaker.failure(`HTTP ${status}`);
+        breaker.failure(`HTTP ${status}`);
         lastErr = new TikHubError(`TikHub ${status}`, status);
         if (attempt < this.cfg.maxRetries) {
           await this.clock.sleep(backoffMs(attempt, Number(res.headers.get("retry-after")) || undefined, 1000, rand));
@@ -210,7 +226,7 @@ export class TikHubClient {
         // 网络错误 / 超时
         if (status === 0) this.log(o, status, this.clock.now() - t0, false, attempt);
         const msg = describeNetworkError(e, this.cfg.proxy);
-        this.breaker.failure(msg);
+        breaker.failure(msg);
         lastErr = new TikHubError(msg);
         if (attempt < this.cfg.maxRetries) await this.clock.sleep(backoffMs(attempt, undefined, 1000, rand));
       }

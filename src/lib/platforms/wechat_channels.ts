@@ -1,3 +1,4 @@
+import type { SearchOptions } from "./index";
 // 视频号：搜索 → 作品；作者账号需要额外换出。
 //
 // 搜索结果里只有作者昵称和头像地址，没有稳定的账号 ID。所以分两步：
@@ -50,11 +51,11 @@ export function parseChannelsSearch(res: any): SearchPage {
   return { posts, ...pageInfo(res, posts.length) };
 }
 
-export async function searchWechatChannels(keyword: string, days: number, next: Record<string, string | number> | null, taskId: number): Promise<SearchPage> {
+export async function searchWechatChannels(keyword: string, days: number, next: Record<string, string | number> | null, taskId: number, options?: SearchOptions): Promise<SearchPage> {
   const res = await wechatSearch(
     "/api/v1/wechat_search/v2/fetch_search_videos",
     { keyword: keyword.slice(0, 100), sort: "latest", publish_time: wechatPublishTime(days), ...(next?.cursor ? { cursor: String(next.cursor) } : {}) },
-    "wechat_channels", taskId,
+    "wechat_channels", taskId, options?.refresh,
   );
   return res ? parseChannelsSearch(res) : { posts: [], hasMore: false, next: {} };
 }

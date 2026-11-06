@@ -67,6 +67,7 @@ const pname = (p: string) => PLATFORMS[p as Platform]?.name ?? p;
 const STATUS_LABEL: Record<string, string> = { none: "无状态", watch: "重点关注", contacted: "已联系", excluded: "已排除" };
 
 export const TOOLS: ToolDef[] = [
+  { name: "help", label: "帮助", description: "说明机器人能处理的请求", role: "member", schema: { type: "object", properties: {} }, toCommand: () => ({ name: "帮助", args: [] }) },
   /* ───────── 查询 ───────── */
   { name: "overview", label: "总览", description: "总览：各竞品的投放账号数、高频复投数、本周新增", role: "member", schema: { type: "object", properties: {} }, toCommand: () => ({ name: "总览", args: [] }), data: () => dataOverview() },
   { name: "list_competitors", label: "竞品列表", description: "列出所有监测中的竞品", role: "member", schema: { type: "object", properties: {} }, toCommand: () => ({ name: "竞品", args: [] }) },
@@ -283,7 +284,10 @@ export const TOOLS: ToolDef[] = [
 export const toolByName = (n: string) => TOOLS.find((t) => t.name === n);
 
 export type ToolCall = { tool: string; args: Record<string, unknown> };
+export type IntentChoice = { label: string } & ({ call: ToolCall } | { web: "new_task"; keyword: string });
+
 export type Plan = {
+  choices?: IntentChoice[];
   calls: ToolCall[];
   crawlDraft?: { target: string; days?: number; from?: string; to?: string };
   /** 需要向用户追问时的问题（此时不执行任何工具） */

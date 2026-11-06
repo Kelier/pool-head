@@ -19,7 +19,7 @@ import { loadSession, saveTurn } from "../src/lib/bot/agent/session";
 import { digestDue, getDigestCfg, parseHour, parseWeekday, sendDigestOnce, setDigestCfg, weekKey, digestCard } from "../src/lib/bot/agent/digest";
 import { toolByName } from "../src/lib/bot/agent/tools";
 import { clean } from "../src/lib/bot/agent/data";
-import { dispatch } from "../src/lib/bot/commands";
+import { runCommand } from "../src/lib/bot/commands";
 import { handleMessageEvent, __resetBotState, type MessageEvent } from "../src/lib/bot/events";
 import type { BotBackend, BotCtx, Sender } from "../src/lib/bot/types";
 
@@ -294,24 +294,26 @@ describe("语义化路由（智能模式）", () => {
   });
   const deps = (extra: object = {}) => ({ sender, backend, env: { ...process.env, ...dsEnv } as Record<string, string | undefined>, botOpenId: async () => "ou_bot", ...extra });
 
-  it("『抓取 X』这种带参数的写法，在智能模式下也要先确认；『/抓取 X』才直接执行", async () => {
+  it("带斜杠和不带斜杠的抓取都需要确认", async () => {
     const runs: number[] = [];
     const be: BotBackend = { runCompetitor: async (id) => (runs.push(id), { id: 5, estimate: 1 }) };
     await handleMessageEvent(msg("抓取 LibTV 近7天"), deps({ backend: be }));
     expect(runs).toHaveLength(0);
     expect(sent.some((s) => String(s.payload).includes("回复「确认」"))).toBe(true);
     await handleMessageEvent(msg("/抓取 LibTV 近7天"), deps({ backend: be }));
+    expect(runs).toHaveLength(0);
+    await handleMessageEvent(msg("确认"), deps({ backend: be }));
     expect(runs).toEqual([1]);
   });
-  it("单个指令词仍然直接执行，不走模型", async () => {
+  it("明确的短句通过意图层规则理解，不走模型", async () => {
     const f = ok({ content: "x" });
     await handleMessageEvent(msg("总览"), deps({ llmFetch: f }));
     expect((f as any).mock.calls).toHaveLength(0); // eslint-disable-line @typescript-eslint/no-explicit-any
     expect(sent.length).toBeGreaterThan(0);
   });
-  it("帮助卡片以大白话示例为主，指令只是速查；成员看不到管理员示例", async () => {
-    const a = JSON.stringify((await dispatch("帮助", ctx("admin"))).card);
-    const m = JSON.stringify((await dispatch("帮助", ctx("member", "ou_member"))).card);
+  it("帮助卡片展示自然语言示例，成员看不到管理员示例", async () => {
+    const a = JSON.stringify((await runCommand("帮助", [], ctx("admin"))).card);
+    const m = JSON.stringify((await runCommand("帮助", [], ctx("member", "ou_member"))).card);
     expect(a).toContain("直接用大白话问我");
     expect(a).toContain("新增竞品");
     expect(m).toContain("直接用大白话问我");
@@ -319,7 +321,7 @@ describe("语义化路由（智能模式）", () => {
     expect(m).not.toContain("抓取");
   });
   it("竞品名容错：大小写与空格", async () => {
-    expect(JSON.stringify((await dispatch("复投 lib tv", ctx())).card ?? (await dispatch("复投 lib tv", ctx())).text)).not.toContain("找不到竞品");
+    expect(JSON.stringify((await runCommand("复投", ["lib tv"], ctx())).card ?? (await runCommand("复投", ["lib tv"], ctx())).text)).not.toContain("找不到竞品");
   });
 });
 

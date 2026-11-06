@@ -59,9 +59,9 @@ export function pageInfo(res: any, count: number): { hasMore: boolean; next: Rec
  * 发起搜索请求。HTTP 400 视为"没有结果"返回 null（鉴权 / 预算 / 熔断 / 网络错误照常抛出）。
  * 代价：真正的参数错误也会被当成空结果，所以打一行日志留痕。
  */
-export async function wechatSearch(path: string, body: Record<string, unknown>, platform: string, taskId: number): Promise<any | null> {
+export async function wechatSearch(path: string, body: Record<string, unknown>, platform: string, taskId: number, refresh?: boolean): Promise<any | null> {
   try {
-    return await tikhub().request({ method: "POST", path, platform, taskId, ttlMs: 60 * 60_000, body });
+    return await tikhub().request({ method: "POST", path, platform, taskId, ttlMs: 60 * 60_000, bypassCache: refresh, body });
   } catch (e) {
     if (e instanceof TikHubError && e.status === 400) {
       console.warn(`[${platform}] 搜索返回 400，按无结果处理（关键词「${String(body.keyword).slice(0, 20)}」）`);

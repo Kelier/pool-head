@@ -8,7 +8,7 @@ process.env.TIKHUB_API_KEY = "test-key";
 process.env.TIKHUB_GLOBAL_QPS = "8";
 
 import { db } from "../src/lib/db";
-import { BudgetExceededError } from "../src/lib/tikhub/client";
+import { BudgetExceededError, TikHubError } from "../src/lib/tikhub/client";
 import { runTask, createTask } from "../src/lib/pipeline";
 import { saveCompetitor, accountRows, getTask } from "../src/lib/queries";
 import { parseTaskConfig } from "../src/lib/validate";
@@ -143,6 +143,43 @@ it("同一页混有过期作品时继续翻页，整页过期时结束", async (
   }
 });
 
+it("各平台独立计数，小红书翻过整页过期内容并在条数上限停下", async () => {
+  const sample = parseDouyinSearch(JSON.parse(dy)).posts[0];
+  const recent = { ...sample, title: "libtv 合作投放", publishedAt: Date.now() - 1000, followers: 10 };
+  const xhsPost = { ...recent, platform: "xiaohongshu" as const };
+  const douyin = vi.spyOn(PLATFORMS.douyin, "search")
+    .mockResolvedValueOnce({ posts: [recent, { ...recent, postId: "douyin-2" }], hasMore: true, next: { cursor: 1 } });
+  const xhs = vi.spyOn(PLATFORMS.xiaohongshu, "search")
+    .mockResolvedValueOnce({
+      posts: [{ ...xhsPost, postId: "expired", publishedAt: Date.now() - 2 * DAY_MS }],
+      hasMore: true,
+      next: { page: 2 },
+    })
+    .mockResolvedValueOnce({
+      posts: [{ ...xhsPost, postId: "recent" }, { ...xhsPost, postId: "over-limit" }],
+      hasMore: true,
+      next: { page: 3 },
+    });
+  try {
+    const config = {
+      ...cfg, platforms: ["douyin", "xiaohongshu"], maxPages: undefined, maxPosts: 2,
+      time: { type: "relative", days: 1 },
+    };
+    const id = newTask(null, config);
+    await runTask(id);
+    expect(douyin).toHaveBeenCalledTimes(1);
+    expect(xhs).toHaveBeenCalledTimes(2);
+    expect(getTask(id)?.progress).toMatchObject({
+      postsSeen: 4, postsSeenByPlatform: { douyin: 2, xiaohongshu: 2 }, postsMatched: 3,
+    });
+    expect(db().prepare("SELECT post_id FROM promo_posts WHERE task_id = ? AND platform = 'xiaohongshu'").all(id))
+      .toEqual([{ post_id: "recent" }]);
+  } finally {
+    douyin.mockRestore();
+    xhs.mockRestore();
+  }
+});
+
 it("自动翻页可超过 100 次，并在循环游标再次出现时停止", async () => {
   let page = 0;
   const search = vi.spyOn(PLATFORMS.douyin, "search").mockImplementation(async () => {
@@ -156,6 +193,61 @@ it("自动翻页可超过 100 次，并在循环游标再次出现时停止", as
     expect(getTask(id)?.status).toBe("done");
   } finally {
     search.mockRestore();
+  }
+});
+
+it("搜索翻页返回 400 时先保存当前平台作品，再搜索其他平台", async () => {
+  const sample = parseDouyinSearch(JSON.parse(dy)).posts[0];
+  const post = { ...sample, title: "libtv 合作投放", publishedAt: Date.now() - 1000 };
+  const search = vi.spyOn(PLATFORMS.douyin, "search")
+    .mockResolvedValueOnce({ posts: [post], hasMore: true, next: { cursor: 1 } })
+    .mockRejectedValueOnce(new TikHubError('TikHub 400：{"request_id":"test-request"}', 400));
+  const otherPost = { ...post, platform: "xiaohongshu" as const, followers: 10 };
+  const otherSearch = vi.spyOn(PLATFORMS.xiaohongshu, "search").mockImplementation(async (_keyword, _days, _next, id) => {
+    expect(accountRows({ taskId: id })).toHaveLength(1);
+    return { posts: [otherPost], hasMore: false, next: {} };
+  });
+  try {
+    const id = newTask(null, { ...cfg, platforms: ["douyin", "xiaohongshu"], maxPages: undefined, minConfidence: 0 });
+    await runTask(id);
+    expect(search).toHaveBeenCalledTimes(2);
+    expect(otherSearch).toHaveBeenCalledTimes(1);
+    const { GET } = await import("../src/app/api/tasks/[id]/route");
+    const response = await GET(new Request(`http://localhost/api/tasks/${id}`), { params: Promise.resolve({ id: String(id) }) });
+    expect(await response.json()).toMatchObject({
+      task: { status: "failed", error: expect.stringContaining("抖音「libtv」第 2 页搜索失败（HTTP 400，请求 ID test-request）") },
+      summary: { posts: 2 },
+      posts: [{ platform: "douyin", postId: post.postId, title: post.title }, { platform: "xiaohongshu", postId: otherPost.postId }],
+      postsPage: 1,
+    });
+  } finally {
+    search.mockRestore();
+    otherSearch.mockRestore();
+  }
+});
+
+it("组合搜索的小红书首屏请求与单平台一致，不携带抖音游标", async () => {
+  const requests: string[] = [];
+  const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+    const url = new URL(String(input));
+    if (url.pathname.endsWith("/search_notes")) requests.push(url.search);
+    return new Response("{}", { status: 200 });
+  });
+  try {
+    const config = { ...cfg, keywords: ["红果"], time: { type: "relative", days: 7 } };
+    for (const platforms of [["xiaohongshu"], ["douyin", "xiaohongshu"]]) {
+      const id = newTask(null, { ...config, platforms });
+      db().prepare("UPDATE tasks SET source='rerun' WHERE id=?").run(id);
+      await runTask(id);
+      expect(getTask(id)?.status).toBe("done");
+    }
+    expect(requests).toHaveLength(2);
+    expect(requests[1]).toBe(requests[0]);
+    expect(Object.fromEntries(new URLSearchParams(requests[0]))).toEqual({
+      keyword: "红果", page: "1", sort_type: "time_descending", note_type: "不限", time_filter: "一周内",
+    });
+  } finally {
+    fetchMock.mockRestore();
   }
 });
 
@@ -173,4 +265,28 @@ it("预算耗尽时保存已命中的作品并暂停任务", async () => {
   } finally {
     search.mockRestore();
   }
+});
+
+it("重跑创建新任务，跳过原搜索缓存并按新条数停止", async () => {
+  const originalId = newTask(null, { ...cfg, keywords: ["rerun-libTV"], maxPages: 1 });
+  await runTask(originalId);
+  const before = calls;
+  expect(getTask(originalId)?.progress.postsSeen).toBeGreaterThan(1);
+
+  const { POST: action } = await import("../src/app/api/tasks/[id]/action/route");
+  const response = await action(new Request(`http://localhost/api/tasks/${originalId}/action`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ action: "rerun", maxPosts: 1 }),
+  }), { params: Promise.resolve({ id: String(originalId) }) });
+  expect(response.status).toBe(201);
+  const { id } = await response.json() as { id: number };
+  expect(id).not.toBe(originalId);
+
+  await vi.waitFor(() => expect(getTask(id)?.status).toBe("done"));
+  expect(calls - before).toBe(1);
+  expect(getTask(id)).toMatchObject({ source: "rerun", config: { maxPosts: 1 }, progress: { postsSeen: 1 } });
+  expect(getTask(id)?.config.maxPages).toBeUndefined();
+  expect(getTask(originalId)?.config.maxPages).toBe(1);
+  expect(getTask(originalId)?.progress.postsSeen).toBeGreaterThan(1);
 });
