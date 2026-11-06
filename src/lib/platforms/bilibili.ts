@@ -52,8 +52,12 @@ export async function searchBilibili(
   days: number,
   next: Record<string, string | number> | null,
   taskId: number,
+  range?: { from: number; to: number },
 ): Promise<SearchPage> {
-  const { begin, end } = bilibiliTimeRange(days);
+  // 整个任务复用同一时间窗口，绝对日期相同的任务也可复用缓存。
+  const { begin, end } = range
+    ? { begin: Math.floor(range.from / 1000), end: Math.floor(range.to / 1000) }
+    : bilibiliTimeRange(days);
   const res = await tikhub().request({
     method: "GET",
     path: "/api/v1/bilibili/web/fetch_general_search",

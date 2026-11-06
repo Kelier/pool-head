@@ -1,4 +1,5 @@
 // 规则意图解析：零成本、离线、可预测。覆盖最常见的说法；没命中再交给大模型（若已配置）。
+import { parseCrawlDates } from "./crawl-time";
 import type { Plan, ToolCall } from "./tools";
 
 export type Catalog = Array<{ name: string }>;
@@ -22,8 +23,9 @@ export function mentionedCompetitors(text: string, catalog: Catalog): string[] {
 }
 
 export function extractDays(text: string): number | null {
-  const m = /(?:近|最近|过去)?\s*(\d{1,3})\s*(?:天|日)/.exec(text);
-  if (m) return Math.min(Math.max(+m[1], 1), 365);
+  const m = /(?:近|最近|过去)?\s*(\d{1,3})\s*天/.exec(text);
+  const relative = m ?? /(?:近|最近|过去)\s*(\d{1,3})\s*日/.exec(text);
+  if (relative) return Math.min(Math.max(+relative[1], 1), 365);
   if (/(一周|一星期|七天|本周|这周|上周)/.test(text)) return 7;
   if (/(半年|六个月)/.test(text)) return 180;
   if (/(一个月|本月|这个月|近一月|最近一月|三十天)/.test(text)) return 30;
@@ -34,7 +36,7 @@ export function extractDays(text: string): number | null {
 const RE = {
   exportIt: /(导出|下载|excel|xlsx|表格|报表|发我.*(文件|表))/i,
   report: /(报告|报表|汇总|周报|月报)/,
-  run: /(抓取|抓一下|抓一抓|爬取|爬一下|重新(抓|跑|爬)|跑一下|跑一遍|更新(一下)?(数据|账号)?|刷新)/,
+  run: /(?:^[/／]?(?:run|crawl)\s+|抓取|抓一下|抓一抓|爬取|爬一下|重新(抓|跑|爬)|跑一下|跑一遍|更新(一下)?(数据|账号)?|刷新)/i,
   compare: /(对比|比较|比一比|比一下|\bvs\b|和.{1,20}比|撞|重合|共同)/i,
   repeat: /(复投|反复|多次(投放|合作)|重复(投放|合作)|深度绑定|常合作|老客户|长期合作|核心.{0,2}(kol|达人|账号))/i,
   fresh: /(新增|新账号|新出现|新投放|新合作|新面孔|新的(账号|达人|博主)|新冒出|有.{0,3}新)/,
@@ -62,6 +64,42 @@ const PRONOUN_RE = /(它|他们|她们|这个|那个|这家|那家|刚才|上面
 const WRITE_RE = /((添加|新增|新建|创建|增加|加上?|删除|删掉|去掉|移除|修改|更新|调整|改成?)\s*(一个|个)?\s*(竞品|监测词|关键词)(?!数据|账号)|(标记|标注|打上?|加上?).{0,12}(标签|重点关注|已联系|排除)|(开启|打开|关闭|停止|取消|设置|设为|改到).{0,6}周报|周报.{0,6}(开启|关闭|推送|改到))/;
 export const isWriteIntent = (text: string) => WRITE_RE.test(text);
 
+/** 抓取意图保留原始目标，目录中没有该竞品时仍能继续补配置。 */
+export function crawlIntent(text: string, catalog: Catalog, last?: string, now?: Date): Plan | null {
+  if (!RE.run.test(text) || RE.exportIt.test(text) || isWriteIntent(text)) return null;
+  const dates = parseCrawlDates(text, now);
+  const ask = (clarify: string): Plan => ({ calls: [], clarify, source: "rules" });
+  if (dates.error) return ask(dates.error);
+  const names = catalog.map((c) => c.name).join("、") || "暂无竞品";
+  const comps = mentionedCompetitors(text, catalog);
+  if (comps.length > 1) return ask(`请先指定一个要抓取的竞品：${comps.join("、")}。`);
+
+  const args = dates.range
+    ? { from: dates.range.from, to: dates.range.to }
+    : { days: extractDays(text) ?? undefined };
+  const residual = (dates.fragment ? text.replace(dates.fragment, " ") : text)
+    .replace(/^(?:(?:请|帮我|麻烦|新增|再|帮忙|给我|重新)\s*)+/, "")
+    .replace(/^[/／](?=抓取)/, "")
+    .replace(RE.run, " ")
+    .replace(/^\s*一下\s*/, "")
+    .replace(/(?:一下|的?投放账号|的?投放数据|的?数据|的?账号)\s*[。！!？?]?$/g, "")
+    .replace(/(?:近|最近|过去)\s*\d{1,3}\s*[天日]|\d{1,3}\s*天/g, "")
+    .trim();
+  const explicitTarget = /^[\p{L}\p{N}][\p{L}\p{N}._-]{0,29}$/u.test(residual) && !/^(一下|全部|所有|竞品|数据|账号|哪个|近|最近|今天|昨天|上周|本周|它|这个|那个)$/.test(residual)
+    ? residual : undefined;
+  const exact = explicitTarget && catalog.find((c) => norm(c.name) === norm(explicitTarget))?.name;
+  const target = exact || (!explicitTarget ? comps[0] ?? (PRONOUN_RE.test(text) ? last : undefined) : undefined);
+  if (target) {
+    const timeArgs = args.days === undefined && !dates.range ? {} : args;
+    return { calls: [{ tool: "run_crawl", args: { competitor: target, ...timeArgs } }], source: "rules" };
+  }
+  if (explicitTarget && catalog.some((c) => norm(c.name).includes(norm(explicitTarget)))) {
+    return { calls: [{ tool: "run_crawl", args: { competitor: explicitTarget, ...args } }], source: "rules" };
+  }
+  if (explicitTarget) return { calls: [], crawlDraft: { target: explicitTarget, ...args }, source: "rules" };
+  return ask(`抓取哪个竞品？现有：${names}`);
+}
+
 /** 返回 null 表示规则无法判断，交给后续环节。 */
 export function ruleIntent(text: string, catalog: Catalog, opts: { last?: string } = {}): Plan | null {
   const t = text.trim();
@@ -70,7 +108,6 @@ export function ruleIntent(text: string, catalog: Catalog, opts: { last?: string
   let comps = mentionedCompetitors(t, catalog);
   // "它 / 那新增呢"：沿用上一轮讨论的竞品（必须仍在名单里）
   if (!comps.length && opts.last && catalog.some((c) => c.name === opts.last) && PRONOUN_RE.test(t)) comps = [opts.last];
-  const days = extractDays(t);
   const mk = (calls: ToolCall[]): Plan => ({ calls, source: "rules" });
   const ask = (q: string): Plan => ({ calls: [], clarify: q, source: "rules" });
   const names = catalog.map((c) => c.name).join("、") || "（还没有竞品，请先在控制台创建）";
@@ -80,10 +117,8 @@ export function ruleIntent(text: string, catalog: Catalog, opts: { last?: string
     const kind = RE.report.test(t) ? "report" : "accounts";
     return mk(comps.map((c) => ({ tool: "export_excel", args: { kind, competitor: c } })).slice(0, 2));
   }
-  if (RE.run.test(t)) {
-    if (!comps.length) return ask(`抓取哪个竞品？现有：${names}`);
-    return mk([{ tool: "run_crawl", args: { competitor: comps[0], ...(days ? { days } : {}) } }]);
-  }
+  const crawl = crawlIntent(t, catalog, opts.last);
+  if (crawl) return crawl;
   if (RE.compare.test(t)) {
     if (comps.length < 2) return ask(`要对比哪两个竞品？现有：${names}`);
     return mk([{ tool: "compare_competitors", args: { competitor_a: comps[0], competitor_b: comps[1] } }]);

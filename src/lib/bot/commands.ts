@@ -9,6 +9,7 @@ import { PLATFORMS } from "../platforms";
 import type { Platform } from "../types";
 import { card, day, fmtN, link, MAX_LIST, pct, trunc } from "./cards";
 import { watchTask } from "./watch";
+import { parseCrawlDates } from "./agent/crawl-time";
 import { llmUsageToday } from "./agent/budget";
 import type { BotCtx, Command, Reply } from "./types";
 
@@ -110,6 +111,9 @@ const COMMANDS: Command[] = [
     names: ["抓取", "run", "crawl"], usage: "抓取 竞品名 [近30天]", desc: "发起一次抓取（会消耗 TikHub 调用）", role: "admin",
     run: async (args, ctx) => {
       if (!args.length) return { text: "用法：抓取 竞品名 [近30天]" };
+      const dates = parseCrawlDates(args.join(" "));
+      if (dates.error) return { text: dates.error };
+      if (dates.range) return { text: "指定日期的抓取需要启用机器人意图层并确认后执行。" };
       const days = parseDays(args[args.length - 1]);
       const name = (days ? args.slice(0, -1) : args).join(" ");
       const f = findCompetitor(name);

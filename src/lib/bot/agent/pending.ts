@@ -17,8 +17,7 @@ export function setPending(ctx: Pick<BotCtx, "chatId" | "userId">, a: PendingAct
 
 /** 取出并删除（确认只能用一次）；过期视为没有。 */
 export function takePending(ctx: Pick<BotCtx, "chatId" | "userId">): PendingAction | null {
-  const r = db().prepare("SELECT kind, payload, summary, expires FROM bot_pending WHERE key = ?").get(key(ctx)) as { kind: string; payload: string; summary: string; expires: number } | undefined;
-  db().prepare("DELETE FROM bot_pending WHERE key = ?").run(key(ctx));
+  const r = db().prepare("DELETE FROM bot_pending WHERE key = ? RETURNING kind, payload, summary, expires").get(key(ctx)) as { kind: string; payload: string; summary: string; expires: number } | undefined;
   if (!r || r.expires < Date.now()) return null;
   return { kind: r.kind, payload: JSON.parse(r.payload), summary: r.summary };
 }

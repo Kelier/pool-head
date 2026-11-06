@@ -10,7 +10,8 @@ process.env.TIKHUB_API_KEY = "test-key";
 process.env.APP_PUBLIC_URL = "https://mon.example.com";
 
 import { db } from "../src/lib/db";
-import { saveCompetitor } from "../src/lib/queries";
+import type { AbsoluteTimeRange } from "../src/lib/types";
+import { listCompetitors, saveCompetitor } from "../src/lib/queries";
 import { ruleIntent, extractDays, mentionedCompetitors } from "../src/lib/bot/agent/rules";
 import { llmPlan, llmConfig, llmConfigured, __resetLlmUsage } from "../src/lib/bot/agent/llm";
 import { handleNaturalLanguage, hasPending, confirmPending, cancelPending, agentMode, __resetAgentState } from "../src/lib/bot/agent";
@@ -25,8 +26,8 @@ const sender: Sender = {
   card: async (_c, payload) => void sent.push({ kind: "card", payload }),
   file: async (_c, name) => void sent.push({ kind: "file", payload: name }),
 };
-const runs: Array<{ id: number; days: number }> = [];
-const backend: BotBackend = { runCompetitor: async (id, days) => (runs.push({ id, days }), { id: 77, estimate: 9 }) };
+const runs: Array<{ id: number; days: number; absolute?: AbsoluteTimeRange }> = [];
+const backend: BotBackend = { runCompetitor: async (id, days, absolute) => (runs.push({ id, days, ...(absolute && { absolute }) }), { id: 77, estimate: 9 }) };
 
 const catalog = [{ name: "LibTV" }, { name: "Lib" }, { name: "即梦AI" }, { name: "可灵" }];
 const ctx = (role: BotCtx["role"] = "admin"): BotCtx => ({ userId: "ou_admin", chatId: "oc_1", chatType: "p2p", role, baseUrl: "https://mon.example.com", sender, backend });
@@ -316,6 +317,42 @@ describe("接入飞书事件", () => {
     expect(runs).toEqual([{ id: 1, days: 7 }]);
     expect(sent[0].payload).toContain("任务 #77");
   });
+  it("日历区间从飞书确认传到执行后端，无效日期不会回退到相对天数", async () => {
+    await handleMessageEvent(msg("抓取 2026年11月1日-11月5日 LibTV 的投放账号"), deps());
+    expect(sent.map((s) => s.payload).join(" ")).toContain("2026-11-01 至 2026-11-05");
+    expect(runs).toHaveLength(0);
+    await handleMessageEvent(msg("确认"), deps());
+    expect(runs).toEqual([{ id: 1, days: 30, absolute: { type: "absolute", from: "2026-11-01", to: "2026-11-05" } }]);
+
+    await handleMessageEvent(msg("帮我抓取 LibTV 2月30日到3月5日"), deps());
+    expect(sent.at(-1)?.payload).toContain("有效的起止日期");
+    expect(hasPending(ctx())).toBe(false);
+  });
+
+  it("保留未配置竞品与原日期，补齐配置后分别确认创建和抓取", async () => {
+    await handleMessageEvent(msg("帮我抓取2026年11月1日-11月5日 tapnow的投放账号"), deps());
+    expect(sent.at(-1)?.payload).toContain("未配置竞品「tapnow」");
+    expect(sent.at(-1)?.payload).toContain("2026-11-01 至 2026-11-05");
+    await handleMessageEvent(msg("新增抓取 tapnow"), deps());
+    expect(sent.at(-1)?.payload).toContain("2026-11-01 至 2026-11-05");
+    await handleMessageEvent(msg("抖音和小红书"), deps());
+    expect(sent.at(-1)?.payload).toContain("监测关键词");
+    expect(sent.at(-1)?.payload).not.toContain("平台");
+    await handleMessageEvent(msg("关键词就用 TapNow"), deps());
+    expect(sent.at(-1)?.payload).toContain("即将新增竞品「tapnow」");
+    expect(listCompetitors().some((c) => c.name === "tapnow")).toBe(false);
+
+    await handleMessageEvent(msg("确认"), deps());
+    const competitor = listCompetitors().find((c) => c.name === "tapnow");
+    expect(competitor?.platforms).toEqual(["douyin", "xiaohongshu"]);
+    expect(competitor?.keywords).toEqual(["TapNow"]);
+    expect(sent.at(-1)?.payload).toContain("2026-11-01 至 2026-11-05");
+    expect(runs).toHaveLength(0);
+
+    await handleMessageEvent(msg("确认"), deps());
+    expect(runs).toEqual([{ id: competitor?.id, days: 30, absolute: { type: "absolute", from: "2026-11-01", to: "2026-11-05" } }]);
+  });
+
   it("取消；没有待确认时的『确认』给出提示", async () => {
     await handleMessageEvent(msg("确认"), deps());
     expect(sent[0].payload).toContain("没有待确认");

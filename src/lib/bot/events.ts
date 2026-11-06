@@ -1,7 +1,8 @@
 // 事件适配：飞书 im.message.receive_v1 → 指令层 → 回复。长连接与 webhook 两种接入方式共用。
 import { roleOf, RateLimiter } from "./auth";
 import { dispatch, parseCommand, cleanText, findCommand, ALL_COMMANDS, type IntentResolver } from "./commands";
-import { agentMode, cancelPending, CANCEL_RE, CONFIRM_RE, confirmPending, handleNaturalLanguage, hasPending, ProgressCard } from "./agent";
+import { agentMode, cancelPending, CANCEL_RE, CONFIRM_RE, confirmPending, handleNaturalLanguage, hasPending, hasCrawlDraft, ProgressCard } from "./agent";
+import { parseCrawlDates } from "./agent/crawl-time";
 import { card } from "./cards";
 import type { BotBackend, BotCtx, Sender } from "./types";
 
@@ -75,7 +76,9 @@ export async function handleMessageEvent(ev: MessageEvent, deps: EventDeps): Pro
   // 规则模式下保持原样：认得的指令词直接执行，其余才走自然语言。
   const known = !!(parsed && findCommand(parsed.name));
   const explicit = /^\s*[/／]/.test(cleanText(text)) || (known && parsed!.args.length === 0);
-  const viaAgent = !known || (agentMode(env) === "llm" && !explicit);
+  const mode = agentMode(env);
+  const dates = parsed && EXPENSIVE.has(parsed.name) ? parseCrawlDates(parsed.args.join(" ")) : undefined;
+  const viaAgent = !known || (mode !== "off" && (Boolean(dates?.range || dates?.error) || (mode === "llm" && !explicit)));
   // 只对会直接执行的抓取计数；经意图层的抓取要等"确认"那一步才计数
   if (!viaAgent && parsed && EXPENSIVE.has(parsed.name) && role === "admin" && !expensive.allow(userId)) return reply("抓取次数过多（每人每小时最多 5 次），请稍后再试。");
 
@@ -89,7 +92,7 @@ export async function handleMessageEvent(ev: MessageEvent, deps: EventDeps): Pro
       const clean = cleanText(text);
       const confirm = CONFIRM_RE.test(clean), cancel = CANCEL_RE.test(clean);
       if (confirm || cancel) {
-        if (!hasPending(ctx)) return reply("没有待确认的操作。");
+        if (!hasPending(ctx) && !(cancel && hasCrawlDraft(ctx))) return reply("没有待确认的操作。");
         if (cancel) return reply(cancelPending(ctx).text!);
         if (!expensive.allow(userId)) return reply("抓取次数过多（每人每小时最多 5 次），请稍后再试。");
         return reply((await confirmPending(ctx)).text!);

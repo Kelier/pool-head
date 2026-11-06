@@ -8,7 +8,9 @@ import { runCommand } from "../commands";
 import type { BotCtx, Progress, Reply } from "../types";
 import { llmAnalyze, llmConfigured, llmPlan, type AnalysisPart, type LlmDeps } from "./llm";
 import { hasPendingAction, setPending, takePending, __resetPending } from "./pending";
-import { isWriteIntent, ruleIntent, wantsAnalysis } from "./rules";
+import { describeCrawlDraft, fillCrawlDraft, type CrawlDraft } from "./crawl-draft";
+import { parseCrawlDates } from "./crawl-time";
+import { crawlIntent, isWriteIntent, ruleIntent, wantsAnalysis } from "./rules";
 import { loadSession, saveTurn, __resetSessions } from "./session";
 import { describeCall, toolByName, type Plan } from "./tools";
 
@@ -28,8 +30,12 @@ export const __resetAgentState = () => { __resetPending(); __resetSessions(); };
 
 export const hasPending = (ctx: BotCtx): boolean => hasPendingAction(ctx);
 
+/** 判断会话是否还有待补充的抓取请求。 */
+export const hasCrawlDraft = (ctx: BotCtx): boolean => Boolean(loadSession(ctx).last.crawlDraft);
+
 export function cancelPending(ctx: BotCtx): Reply {
   takePending(ctx);
+  if (loadSession(ctx).last.crawlDraft) saveTurn(ctx, "取消", "已取消抓取草稿", { crawlDraft: null });
   return { text: "已取消。" };
 }
 
@@ -39,13 +45,24 @@ export async function confirmPending(ctx: BotCtx): Promise<Reply> {
   const tool = toolByName(p.kind);
   if (!tool?.execute) return { text: "这个待办已经失效，请重新说一遍。" };
   if (tool.role === "admin" && ctx.role !== "admin") return { text: tool.billed ? "抓取仅管理员可用。" : "该操作仅管理员可用。" }; // 权限以执行时为准，而不是提议时
-  return tool.execute(p.payload, ctx);
+  const reply = await tool.execute(p.payload, ctx);
+  if (p.kind !== "add_competitor" || !p.payload.followUpCrawl) return reply;
+  const draft = p.payload.followUpCrawl as CrawlDraft;
+  const crawl = toolByName("run_crawl")!.propose!({ ...draft, competitor: draft.target }, ctx);
+  if ("error" in crawl) return { text: `${reply.text}\n${crawl.error}` };
+  setPending(ctx, { kind: "run_crawl", payload: crawl.payload, summary: crawl.summary });
+  return { text: `${reply.text}\n${confirmationText(crawl.summary)}` };
 }
 
 export type AgentDeps = LlmDeps & { mode?: AgentMode; progress?: Progress };
 export type NLResult = { replies: Reply[]; understood?: string; source?: Plan["source"]; analysis?: string; note?: string } | null;
 
 const DENY = (billed?: boolean) => (billed ? "抓取会消耗 API 额度，仅管理员可发起。" : "这个操作仅管理员可用。");
+/** 生成修改类操作统一的确认提示。 */
+function confirmationText(summary: string): string {
+  return `${summary}\n回复「确认」执行，「取消」放弃（5 分钟内有效）。`;
+}
+
 const LONG = 40; // 超过这个长度的句子规则吃不准，直接交给大模型（若已配置）
 
 export async function handleNaturalLanguage(text: string, ctx: BotCtx, deps: AgentDeps = {}): Promise<NLResult> {
@@ -63,12 +80,39 @@ export async function handleNaturalLanguage(text: string, ctx: BotCtx, deps: Age
   const session = loadSession(ctx);
   const last = catalog.find((c) => c.name === session.last.competitor)?.name;
 
-  let plan: Plan | null = null;
+  const priorDraft = ctx.role === "admin" ? session.last.crawlDraft : undefined;
+  let draft = priorDraft ? fillCrawlDraft(text, priorDraft) : undefined;
+  const now = deps.today ? new Date(deps.today()) : undefined;
+  const crawl = !write ? crawlIntent(text, catalog, last, now) : null;
+  let plan = crawl;
+  if (crawl?.clarify && ctx.role === "admin") takePending(ctx);
+  if (!draft && plan?.crawlDraft) {
+    const incoming = plan.crawlDraft;
+    const sameTarget = priorDraft?.target.toLowerCase() === incoming.target.toLowerCase();
+    draft = sameTarget ? {
+      ...priorDraft,
+      ...incoming,
+      days: incoming.days ?? (incoming.from ? undefined : priorDraft.days),
+      from: incoming.from ?? (incoming.days ? undefined : priorDraft.from),
+      to: incoming.to ?? (incoming.days ? undefined : priorDraft.to),
+    } : incoming;
+  }
+  if (draft) {
+    if (ctx.role !== "admin") return { replies: [{ text: DENY(true) }], source: "rules" };
+    if (!priorDraft || plan?.crawlDraft) takePending(ctx);
+    saveTurn(ctx, text, `准备监测 ${draft.target}`, { crawlDraft: draft });
+    if (!draft.keywords || !draft.platforms) return { replies: [{ text: describeCrawlDraft(draft) }], source: "rules" };
+    plan = { calls: [{ tool: "add_competitor", args: { name: draft.target, keywords: draft.keywords, platforms: draft.platforms } }], source: "rules" };
+  }
+
   let triedRules = false;
-  if (!write && !(ready && text.length > LONG)) { plan = ruleIntent(text, catalog, { last }); triedRules = true; }
-  if (!plan && ready) {
+  if (!plan && !write && !(ready && text.length > LONG)) { plan = ruleIntent(text, catalog, { last }); triedRules = true; }
+  // 缺目标或有歧义时，允许模型结合上下文补充理解，失败时保留原追问。
+  const dates = crawl?.clarify ? parseCrawlDates(text, now) : undefined;
+  const canRefine = plan?.clarify && (!crawl || plan.clarify.startsWith("抓取哪个竞品")) && !dates?.error && !dates?.range;
+  if (ready && (!plan || (canRefine && ctx.role === "admin"))) {
     await deps.progress?.step("🤔 正在理解你的问题…");
-    plan = await llmPlan(text, catalog, ctx.role === "admin" ? "admin" : "member", { ...deps, env, userId: ctx.userId, session });
+    plan = (await llmPlan(text, catalog, ctx.role === "admin" ? "admin" : "member", { ...deps, env, userId: ctx.userId, session })) ?? plan;
   }
   if (!plan && !write && !triedRules) plan = ruleIntent(text, catalog, { last }); // 长句交给模型却没拿到结果：回落到规则
   if (!plan) return null;
@@ -100,8 +144,16 @@ export async function handleNaturalLanguage(text: string, ctx: BotCtx, deps: Age
       if ("error" in p) { replies.push({ text: p.error }); continue; }
       proposed = true;
       understood.push(describeCall(call));
+      const continuation = draft ?? (priorDraft && typeof call.args.name === "string" &&
+        call.args.name.trim().toLowerCase() === priorDraft.target.toLowerCase() ? priorDraft : undefined);
+      if (continuation && tool.name === "add_competitor") {
+        p.payload.followUpCrawl = continuation;
+        saveTurn(ctx, text, "等待确认新增竞品", { crawlDraft: null });
+      } else if (tool.name === "run_crawl" && priorDraft) {
+        saveTurn(ctx, text, "等待确认抓取", { crawlDraft: null });
+      }
       setPending(ctx, { kind: tool.name, payload: p.payload, summary: p.summary });
-      replies.push({ text: `${p.summary}\n回复「确认」执行，「取消」放弃（5 分钟内有效）。` });
+      replies.push({ text: confirmationText(p.summary) });
       continue;
     }
 

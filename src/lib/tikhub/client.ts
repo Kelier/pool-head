@@ -36,13 +36,11 @@ export type TikHubConfig = {
   proxy?: string;
 };
 
-export function configFromEnv(env = process.env): TikHubConfig {
+/** 读取运行参数，供只读页面使用，无需 TikHub 密钥。 */
+export function runtimeConfigFromEnv(env = process.env): Omit<TikHubConfig, "apiKey"> {
   const num = (k: string, d: number) => (env[k] && !Number.isNaN(Number(env[k])) ? Number(env[k]) : d);
-  const apiKey = env.TIKHUB_API_KEY;
-  if (!apiKey) throw new Error("缺少 TIKHUB_API_KEY（见 .env.example）");
   return {
-    apiKey,
-    baseUrl: env.TIKHUB_BASE_URL || "https://api.tikhub.io",
+    baseUrl: "https://api.tikhub.io",
     qps: Math.min(num("TIKHUB_GLOBAL_QPS", 3), 8), // 官方上限 10，硬顶 8
     platformConcurrency: num("TIKHUB_PLATFORM_CONCURRENCY", 2),
     globalConcurrency: 4,
@@ -52,6 +50,24 @@ export function configFromEnv(env = process.env): TikHubConfig {
     jitterMs: [50, 300],
     proxy: env.TIKHUB_PROXY?.trim() || undefined,
   };
+}
+
+export const TIKHUB_KEY_REQUIRED = "请先配置 TIKHUB_API_KEY，再启动抓取。";
+
+/** 实际调用 TikHub 时才要求密钥。 */
+export function configFromEnv(env = process.env): TikHubConfig {
+  const apiKey = env.TIKHUB_API_KEY?.trim();
+  if (!apiKey) throw new Error(TIKHUB_KEY_REQUIRED);
+  return { ...runtimeConfigFromEnv(env), apiKey };
+}
+
+/** 从本地记录读取当天实际请求数，不含缓存命中。 */
+export function countCallsToday(): number {
+  const start = new Date();
+  start.setHours(0, 0, 0, 0);
+  const row = db().prepare("SELECT COUNT(*) c FROM api_calls WHERE cached = 0 AND ts >= ?")
+    .get(start.getTime()) as { c: number };
+  return row.c;
 }
 
 /** 把 undici 的 "fetch failed" 翻译成可操作的提示。 */
@@ -85,6 +101,7 @@ export class TikHubClient {
   private global: Semaphore;
   private perPlatform = new Map<string, Semaphore>();
   private breaker: CircuitBreaker;
+  private reservedAttempts = 0;
   private inflight = new Map<string, Promise<unknown>>();
   private agent?: import("undici").ProxyAgent;
 
@@ -104,12 +121,7 @@ export class TikHubClient {
 
   /** 今日已发出的真实请求数（不含缓存命中）。 */
   usedToday(): number {
-    const start = new Date();
-    start.setHours(0, 0, 0, 0);
-    const r = db()
-      .prepare("SELECT COUNT(*) c FROM api_calls WHERE cached = 0 AND ts >= ?")
-      .get(start.getTime()) as { c: number };
-    return r.c;
+    return countCallsToday();
   }
 
   async request<T>(o: RequestOpts): Promise<T> {
@@ -153,13 +165,23 @@ export class TikHubClient {
       const [lo, hi] = this.cfg.jitterMs;
       await this.clock.sleep(lo + rand() * (hi - lo));
 
+      // 到实际发送前再检查，给并发中尚未记入 SQLite 的请求保留额度。
+      const committed = this.usedToday();
+      if (committed + this.reservedAttempts >= this.cfg.dailyBudget) {
+        throw new BudgetExceededError(committed + this.reservedAttempts, this.cfg.dailyBudget);
+      }
       const t0 = this.clock.now();
       let status = 0;
       try {
-        const res = await this.send(o);
-        status = res.status;
-        const ms = this.clock.now() - t0;
-        this.log(o, status, ms, false, attempt);
+        let res: Response;
+        this.reservedAttempts++;
+        try {
+          res = await this.send(o);
+          status = res.status;
+          this.log(o, status, this.clock.now() - t0, false, attempt);
+        } finally {
+          this.reservedAttempts--;
+        }
 
         if (res.ok) {
           this.breaker.success();
@@ -186,7 +208,7 @@ export class TikHubClient {
       } catch (e) {
         if (e instanceof TikHubError || e instanceof CircuitOpenError || e instanceof BudgetExceededError) throw e;
         // 网络错误 / 超时
-        this.log(o, status, this.clock.now() - t0, false, attempt);
+        if (status === 0) this.log(o, status, this.clock.now() - t0, false, attempt);
         const msg = describeNetworkError(e, this.cfg.proxy);
         this.breaker.failure(msg);
         lastErr = new TikHubError(msg);
@@ -211,6 +233,7 @@ export class TikHubClient {
     return f(url, {
       ...extra,
       method: o.method,
+      redirect: "error",
       headers: {
         Authorization: `Bearer ${this.cfg.apiKey}`,
         ...(o.body ? { "Content-Type": "application/json" } : {}),

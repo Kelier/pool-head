@@ -6,6 +6,7 @@
 //   · 修改  —— propose 只生成待确认提议（落库），用户回复「确认」后才 execute；永远不会在模型调用里直接生效
 //   · 设置  —— role=admin 且立即生效但无计费、可逆的开关（周报、订阅）
 import { accountRows, getCompetitor, listCompetitors, saveAccountMeta, saveCompetitor } from "../../queries";
+import { absoluteFromArgs, DATE_CLARIFICATION } from "./crawl-time";
 import { estimateCalls } from "../../pipeline";
 import { configForCompetitor } from "../../scheduler";
 import { PLATFORMS, PLATFORM_IDS } from "../../platforms";
@@ -136,9 +137,11 @@ export const TOOLS: ToolDef[] = [
   /* ───────── 修改（只提议，确认后才执行） ───────── */
   {
     name: "run_crawl", label: "抓取", description: "发起一次新的抓取，更新某竞品的投放数据（会消耗 API 额度，仅在用户明确要求抓取/更新数据时使用）", role: "admin", billed: true,
-    schema: { type: "object", properties: { competitor: comp, days: { type: "string", description: "时间范围（天），1–365，默认 30" } }, required: ["competitor"] },
+    schema: { type: "object", properties: { competitor: comp, days: { type: "string", description: "相对时间（天），1–365，默认 30" }, from: { type: "string", description: "绝对起始日期 YYYY-MM-DD，与 to 一起提供" }, to: { type: "string", description: "绝对结束日期 YYYY-MM-DD" } }, required: ["competitor"] },
     toCommand: (a) => {
       if (need(a.competitor, "竞品名")) return { error: "请告诉我抓取哪个竞品" };
+      const absolute = absoluteFromArgs(a);
+      if (absolute) return { name: "抓取", args: [str(a.competitor), `${absolute.from} 至 ${absolute.to}`] };
       const d = Number(a.days);
       return { name: "抓取", args: [str(a.competitor), ...(Number.isFinite(d) && d >= 1 && d <= 365 ? [`${Math.round(d)}天`] : [])] };
     },
@@ -148,13 +151,21 @@ export const TOOLS: ToolDef[] = [
       if ("error" in f) return { error: f.error };
       const d = Number(a.days);
       const days = Number.isFinite(d) && d >= 1 && d <= 365 ? Math.round(d) : 30;
-      const cfg = configForCompetitor(f.c.id, days, 3);
-      return { summary: `即将抓取「${f.c.name}」近 ${days} 天（预估约 ${cfg ? estimateCalls(cfg) : 0} 次 API 调用）。`, payload: { competitorId: f.c.id, name: f.c.name, days } };
+      const absolute = absoluteFromArgs(a);
+      if ((a.from !== undefined || a.to !== undefined) && !absolute) return { error: DATE_CLARIFICATION };
+      const cfg = configForCompetitor(f.c.id, absolute ?? days);
+      const window = absolute ? `${absolute.from} 至 ${absolute.to}（含首尾）` : `近 ${days} 天`;
+      return { summary: `即将抓取「${f.c.name}」${window}（自动翻页，含补资料预算参考约 ${cfg ? estimateCalls(cfg) : 0} 次 API 调用）。`, payload: { competitorId: f.c.id, name: f.c.name, days, ...(absolute && { from: absolute.from, to: absolute.to }) } };
     },
     execute: async (p, ctx) => {
-      const r = await ctx.backend.runCompetitor(Number(p.competitorId), Number(p.days));
+      const absolute = absoluteFromArgs(p);
+      if ((p.from !== undefined || p.to !== undefined) && !absolute) return { text: DATE_CLARIFICATION };
+      const id = Number(p.competitorId);
+      const days = Number(p.days);
+      const r = absolute ? await ctx.backend.runCompetitor(id, days, absolute) : await ctx.backend.runCompetitor(id, days);
+      const window = absolute ? `${absolute.from} 至 ${absolute.to}` : `近 ${days} 天`;
       watchTask(r.id, ctx.chatId, ctx.sender, ctx.baseUrl);
-      return { text: `已发起「${p.name}」抓取（任务 #${r.id}，近 ${p.days} 天，预估约 ${r.estimate} 次调用）。完成后我会在这里通知你。` };
+      return { text: `已发起「${p.name}」抓取（任务 #${r.id}，${window}，预估约 ${r.estimate} 次调用）。完成后我会在这里通知你。` };
     },
   },
   {
@@ -179,7 +190,8 @@ export const TOOLS: ToolDef[] = [
     execute: async (p) => {
       if (listCompetitors().some((c) => c.name.toLowerCase() === String(p.name).toLowerCase())) return { text: `竞品「${p.name}」已经存在，未重复创建。` };
       const id = saveCompetitor({ name: p.name, keywords: p.keywords, platforms: p.platforms });
-      return { text: `已新增竞品「${p.name}」（#${id}）。要开始抓取的话告诉我，例如“抓取 ${p.name} 近 30 天”。` };
+      const created = `已新增竞品「${p.name}」（#${id}）。`;
+      return { text: p.followUpCrawl ? created : `${created}要开始抓取的话告诉我，例如“抓取 ${p.name} 近 30 天”。` };
     },
   },
   {
@@ -273,6 +285,7 @@ export const toolByName = (n: string) => TOOLS.find((t) => t.name === n);
 export type ToolCall = { tool: string; args: Record<string, unknown> };
 export type Plan = {
   calls: ToolCall[];
+  crawlDraft?: { target: string; days?: number; from?: string; to?: string };
   /** 需要向用户追问时的问题（此时不执行任何工具） */
   clarify?: string;
   /** 查询完成后让模型做一次解读；值为关注点（一句话） */

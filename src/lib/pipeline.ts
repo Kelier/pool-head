@@ -1,7 +1,8 @@
+import { estimateSearchPages } from "./search-pages";
 import { db } from "./db";
 import { classify } from "./classify";
 import { PLATFORMS } from "./platforms";
-import { tikhub, configFromEnv, BudgetExceededError } from "./tikhub/client";
+import { countCallsToday, runtimeConfigFromEnv, BudgetExceededError } from "./tikhub/client";
 import { CircuitOpenError, Semaphore } from "./tikhub/limiter";
 import { getSettings } from "./settings";
 import { addAlert } from "./alerts";
@@ -11,17 +12,18 @@ const DAY = 86_400_000;
 
 export function resolveRange(t: TaskConfig["time"], now = Date.now()): { from: number; to: number; days: number } {
   if (t.type === "relative") return { from: now - t.days * DAY, to: now, days: t.days };
-  const from = new Date(`${t.from}T00:00:00`).getTime();
-  const to = new Date(`${t.to}T23:59:59.999`).getTime();
+  const from = new Date(`${t.from}T00:00:00+08:00`).getTime();
+  const to = new Date(`${t.to}T23:59:59.999+08:00`).getTime();
   // 搜索接口只有"最近N天"档位，所以按距今天数取档
   return { from, to, days: Math.max(1, Math.ceil((now - from) / DAY)) };
 }
 
 /** 创建任务前估算 TikHub 调用量，用于预算确认。 */
 export function estimateCalls(cfg: TaskConfig): number {
-  const search = cfg.platforms.length * cfg.keywords.length * cfg.maxPages;
+  const pages = cfg.maxPages ?? estimateSearchPages(cfg.platforms.length, cfg.keywords.length);
+  const search = cfg.platforms.length * cfg.keywords.length * pages;
   // 需单独补粉丝数的平台：每个命中账号 1 次调用，粗估 = 每页约 12 个账号
-  const accounts = Math.min(100, cfg.keywords.length * cfg.maxPages * 12);
+  const accounts = Math.min(100, cfg.keywords.length * pages * 12);
   const enrich = cfg.platforms.reduce((n, p) => n + (PLATFORMS[p].enrichCalls?.() ?? (PLATFORMS[p].followers ? 1 : 0)), 0) * accounts;
   return search + enrich;
 }
@@ -63,13 +65,35 @@ export async function runTask(taskId: number): Promise<void> {
     const before = scopeCounts(row.scope);
     const hits = new Map<string, { post: NormPost; keywords: Set<string>; confidence: number; reasons: string[] }>();
 
-    for (const platform of cfg.platforms) {
-      for (const kw of cfg.keywords) {
+    let budgetPause: BudgetExceededError | undefined;
+    /** 预算耗尽时保留已获取的数据，其他错误仍按原流程处理。 */
+    async function withinBudget<T>(request: () => Promise<T>): Promise<T | undefined> {
+      if (budgetPause) return undefined;
+      try {
+        return await request();
+      } catch (error) {
+        if (!(error instanceof BudgetExceededError)) throw error;
+        budgetPause = error;
+        return undefined;
+      }
+    }
+
+    search: for (const platform of new Set(cfg.platforms)) {
+      for (const kw of new Set(cfg.keywords)) {
         let next: Record<string, string | number> | null = null;
-        for (let page = 0; page < cfg.maxPages; page++) {
+        const cursors = new Set<string>();
+        const seenPages = new Set<string>();
+        for (let page = 0; cfg.maxPages == null || page < cfg.maxPages; page++) {
           checkCancel();
-          const res = await PLATFORMS[platform].search(kw, range.days, next, taskId);
+          const res = await withinBudget(() => PLATFORMS[platform].search(kw, range.days, next, taskId, range));
+          if (!res) break search;
           p.calls = (p.calls ?? 0) + 1;
+          // 某些平台会换游标但仍返回同一批作品。
+          if (res.posts.length) {
+            const fingerprint = JSON.stringify(res.posts.map((post) => post.postId).sort());
+            if (seenPages.has(fingerprint)) break;
+            seenPages.add(fingerprint);
+          }
           p.postsSeen = (p.postsSeen ?? 0) + res.posts.length;
           for (const post of res.posts) {
             if (post.publishedAt < range.from || post.publishedAt > range.to) continue;
@@ -87,8 +111,12 @@ export async function runTask(taskId: number): Promise<void> {
           p.postsMatched = hits.size;
           setProgress(taskId, p);
           // 按最新排序：整页都早于起点，后面更早，停止翻页
-          const oldest = Math.min(...res.posts.map((x) => x.publishedAt), Infinity);
-          if (!res.hasMore || (res.posts.length > 0 && oldest < range.from)) break;
+          if (!res.hasMore || (res.posts.length > 0 && res.posts.every((post) => post.publishedAt < range.from))) break;
+          // 比较已使用的分页参数，拦住不前进或来回跳的游标。
+          const entries = Object.entries(res.next).sort(([a], [b]) => a.localeCompare(b));
+          const cursor = JSON.stringify(entries);
+          if (!entries.length || cursors.has(cursor)) break;
+          cursors.add(cursor);
           next = res.next;
         }
       }
@@ -105,7 +133,9 @@ export async function runTask(taskId: number): Promise<void> {
       const k = `${post.platform}:${post.accountUid}`;
       if (!resolve || resolved.has(k)) continue;
       checkCancel();
-      resolved.set(k, await resolve(post, taskId));
+      const account = await withinBudget(() => resolve(post, taskId));
+      if (account === undefined) break;
+      resolved.set(k, account);
       p.calls = (p.calls ?? 0) + 1;
     }
     for (const { post } of hits.values()) {
@@ -129,7 +159,9 @@ export async function runTask(taskId: number): Promise<void> {
       const platform = k.slice(0, i) as TaskConfig["platforms"][number];
       const fn = PLATFORMS[platform]?.followers;
       if (fn) {
-        followers.set(k, await fn(k.slice(i + 1), taskId));
+        const count = await withinBudget(() => fn(k.slice(i + 1), taskId));
+        if (count === undefined) break;
+        followers.set(k, count);
         p.calls = (p.calls ?? 0) + 1;
       }
     }
@@ -182,13 +214,18 @@ export async function runTask(taskId: number): Promise<void> {
     p.repeatAccounts = [...accounts].filter((k) => (after.get(k) ?? 0) >= n).length;
     p.stage = "done";
     p.accounts = accounts.size;
-    d.prepare("UPDATE tasks SET status='done', progress=?, finished_at=? WHERE id=?").run(JSON.stringify(p), Date.now(), taskId);
+    if (budgetPause) p.note = budgetPause.message;
+    d.prepare("UPDATE tasks SET status=?, error=?, progress=?, finished_at=? WHERE id=?")
+      .run(budgetPause ? "paused_budget" : "done", budgetPause?.message ?? null, JSON.stringify(p), Date.now(), taskId);
 
     const label = row.name || `任务 #${taskId}`;
+    if (budgetPause) {
+      addAlert("task_failed", `「${label}」预算已用完，已保存当前结果`, budgetPause.message, `/tasks/${taskId}`);
+      return;
+    }
     addAlert("task_done", `「${label}」抓取完成`, `命中 ${accounts.size} 个账号，其中新增 ${p.newAccounts} 个`, `/tasks/${taskId}`);
     if (p.newRepeat) addAlert("new_repeat", `「${label}」新增 ${p.newRepeat} 个高频复投账号`, "这些账号投放次数刚达到复投阈值", `/tasks/${taskId}`);
-    const used = tikhub().usedToday();
-    const limit = configFromEnv().dailyBudget;
+    const { used, limit } = budgetStatus();
     if (used / limit >= 0.8) addAlert("budget", `今日调用已达预算 ${Math.round((used / limit) * 100)}%`, `${used} / ${limit}`, "/settings");
   } catch (e) {
     const cancelled = e instanceof Cancelled;
@@ -224,6 +261,7 @@ export function cancelTask(id: number) {
   db().prepare("UPDATE tasks SET cancel = 1 WHERE id = ? AND status IN ('pending','running')").run(id);
 }
 
+/** 预算读自本地统计，密钥仅在准备发起抓取时检查。 */
 export function budgetStatus() {
-  return { used: tikhub().usedToday(), limit: configFromEnv().dailyBudget };
+  return { used: countCallsToday(), limit: runtimeConfigFromEnv().dailyBudget, configured: !!process.env.TIKHUB_API_KEY?.trim() };
 }

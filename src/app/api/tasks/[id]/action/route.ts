@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { TIKHUB_KEY_REQUIRED } from "@/lib/tikhub/client";
 import { getTask } from "@/lib/queries";
 import { cancelTask, createTask, estimateCalls, budgetStatus } from "@/lib/pipeline";
 
@@ -15,8 +16,9 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
   }
   if (action === "rerun") {
     const estimate = estimateCalls(t.config);
-    const { used, limit } = budgetStatus();
-    if (used + estimate > limit) return NextResponse.json({ error: `预估 ${estimate} 次调用，今日已用 ${used}/${limit}，超出预算` }, { status: 429 });
+    const { used, limit, configured } = budgetStatus();
+    if (!configured) return NextResponse.json({ error: TIKHUB_KEY_REQUIRED }, { status: 503 });
+    if (t.config.maxPages == null ? used >= limit : used + estimate > limit) return NextResponse.json({ error: `预估 ${estimate} 次调用，今日已用 ${used}/${limit}，超出预算` }, { status: 429 });
     const nid = createTask(t.config, { competitorId: t.competitorId, name: t.name ?? undefined, source: "rerun" });
     return NextResponse.json({ id: nid }, { status: 201 });
   }

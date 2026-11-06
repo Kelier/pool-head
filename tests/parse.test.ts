@@ -60,6 +60,7 @@ describe("时间", () => {
   it("绝对区间含首尾", () => {
     const r = resolveRange({ type: "absolute", from: "2026-10-01", to: "2026-10-15" }, new Date("2026-10-14T12:00:00").getTime());
     expect(r.days).toBe(14);
-    expect(r.to - r.from).toBeGreaterThan(14 * 86_400_000);
+    expect(r.from).toBe(Date.parse("2026-10-01T00:00:00+08:00"));
+    expect(r.to).toBe(Date.parse("2026-10-15T23:59:59.999+08:00"));
   });
 });
