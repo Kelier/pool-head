@@ -462,10 +462,10 @@ BOT_LLM_DAILY_CAP=200
 
 用 `pnpm bot` 启动飞书长连接。普通消息可通过 `BOT_AGENT=llm`、`BOT_LLM_PROVIDER=deepseek` 和本机配置的 `DEEPSEEK_API_KEY` 使用 DeepSeek，意图规划会读取项目根目录的 `agent.md` 和 `memory.md`。
 
-先在本机终端确认 `npr <GitHub PR 链接>` 会用预期的 GitHub 账号提交 APPROVE，并能在无交互模式下运行。然后在 `.env` 中配置：
+先在本机终端确认 `npr list <GitHub PR 链接…>` 会用预期的 GitHub 账号提交 APPROVE，并能在无交互模式下运行。然后在 `.env` 中配置：
 
 - `FEISHU_NPR_EXECUTABLE` 填写 npr 的绝对路径。Windows 上使用 npm 安装时可填写 `C:/Users/你的用户名/AppData/Roaming/npm/npr.cmd`。如果 npr 是 shell 别名或函数，请先封装成可执行脚本。
 - `FEISHU_NPR_OPEN_IDS` 填写允许审批的飞书用户 open_id，逗号分隔。用户也需要有机器人访问权限。
 - `FEISHU_NPR_REPOS` 填写允许审批的 `owner/repo`，逗号分隔。
 
-重启长连接后，授权用户私聊发送 `npr https://github.com/OWNER/REPO/pull/123`。审批身份取决于 npr 使用的本机 GitHub 凭证。
+重启长连接后，授权用户可以私聊发送 `npr list https://github.com/OWNER/REPO/pull/123 https://github.com/OWNER/REPO/pull/456`，链接之间用空格隔开。单条链接也可以用 `npr <链接>`，机器人会转成 `npr list <链接>`。审批身份取决于 npr 使用的本机 GitHub 凭证。

@@ -147,7 +147,7 @@ describe("事件处理与权限", () => {
     const url = "https://github.com/Kelier/pool-head/pull/42";
     await handleMessageEvent(msg(`npr ${url}`, {}, "ou_member"), eventDeps);
     await handleMessageEvent(msg(`npr ${url}`, { chat_type: "group", mentions: [{ key: "@_user_1", id: { open_id: "ou_bot" } }] }), eventDeps);
-    await handleMessageEvent(msg("npr https://github.com/other/repo/pull/42"), eventDeps);
+    await handleMessageEvent(msg(`npr list ${url} https://github.com/other/repo/pull/42`), eventDeps);
     await handleMessageEvent(msg(`npr ${url} && whoami`), eventDeps);
     await handleMessageEvent(msg(`npr ${url}`), { ...eventDeps, nprRunner: undefined });
     expect(nprRunner).not.toHaveBeenCalled();
@@ -156,9 +156,14 @@ describe("事件处理与权限", () => {
     await handleMessageEvent(event, eventDeps);
     await handleMessageEvent(event, eventDeps);
     expect(nprRunner).toHaveBeenCalledTimes(1);
-    expect(nprRunner).toHaveBeenCalledWith("/usr/local/bin/npr", url);
+    expect(nprRunner).toHaveBeenCalledWith("/usr/local/bin/npr", [url]);
     expect(llmFetch).not.toHaveBeenCalled();
     expect(sent.at(-1)?.payload).toContain("npr 执行成功");
+
+    const secondUrl = "https://github.com/Kelier/pool-head/pull/43";
+    await handleMessageEvent(msg(`npr list ${url} ${secondUrl}`), eventDeps);
+    expect(nprRunner).toHaveBeenCalledTimes(2);
+    expect(nprRunner).toHaveBeenLastCalledWith("/usr/local/bin/npr", [url, secondUrl]);
 
     nprRunner.mockRejectedValueOnce(Object.assign(new Error("private command output"), { code: 1 }));
     await handleMessageEvent(msg(`npr ${url}`), eventDeps);
