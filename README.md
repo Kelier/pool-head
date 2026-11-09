@@ -178,6 +178,8 @@ VALUES ('HOE 用户 UUID', 'cli_应用 ID', 'ou_用户 Open ID');
 
 在 `.env` 或 `.env.local` 设置 `WEB_AUTH_MODE=local_admin`。开发时运行 `pnpm dev --hostname 127.0.0.1 --port 3111`，生产构建运行 `pnpm build` 后用 `pnpm start` 启动。两者都可使用同一 SQLite 管理员。尚未创建管理员时，运行 `pnpm local-admin` 生成凭证，终端会显示生成的密码。登录入口为 `http://localhost:3111/local-admin`，登录后可在 `/local-admin/reset` 重置。每次生成或重置后有效期为 7 天，旧密码及会话立即失效。
 
+如需通过 Tailscale IPv4 使用该账号，在 `.env` 中启用 `LOCAL_ADMIN_TAILSCALE_ENABLED=1`，并把 `APP_PUBLIC_URL` 设为实际访问地址，例如 `http://100.111.207.33:8888`。启动 Web 服务时将 `--hostname` 设为该部署机器的 Tailscale IPv4，`--port` 设为相同端口。获准访问该机器的 Tailscale 用户可从该地址的 `/local-admin` 登录。
+
 ## 上线注意
 
 推荐先在带持久卷的常驻 Node.js 22.13+ 服务上运行 Web 和抓取进程，Supabase 单独保存网页登录账号和会话。业务 SQLite 放在持久卷，通过 `DB_FILE` 指定绝对路径。
