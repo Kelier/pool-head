@@ -26,12 +26,25 @@ beforeEach(() => {
 });
 afterEach(() => { vi.unstubAllEnvs(); vi.unstubAllGlobals(); });
 
-it.each(["", "public", "local_admin"])("免登录模式 %s 开放任务查看，拦截匿名写入和导出", async (mode) => {
+it.each(["", "local_admin"])("兼容模式 %s 开放任务查看，拦截匿名写入和导出", async (mode) => {
   vi.stubEnv("WEB_AUTH_MODE", mode);
   expect((await middleware(request("/tasks/12"))).headers.get("x-middleware-next")).toBe("1");
   expect((await middleware(request("/api/tasks/12"))).headers.get("x-middleware-next")).toBe("1");
   expect((await middleware(new NextRequest(APP_ORIGIN + "/api/tasks/12", { method: "DELETE" }))).status).toBe(401);
   expect((await middleware(request("/api/export?kind=accounts"))).status).toBe(401);
+});
+
+it("public 模式可免登录操作和导出，拒绝跨站写请求并关闭网页登录入口", async () => {
+  vi.stubEnv("WEB_AUTH_MODE", "public");
+  expect((await middleware(request("/"))).headers.get("x-middleware-next")).toBe("1");
+  expect((await middleware(request("/api/export?kind=accounts"))).headers.get("x-middleware-next")).toBe("1");
+  const change = (path: string, method: string, origin: string) =>
+    middleware(new NextRequest(APP_ORIGIN + path, { method, headers: { origin } }));
+  expect((await change("/api/tasks", "POST", APP_ORIGIN)).headers.get("x-middleware-next")).toBe("1");
+  expect((await change("/api/tasks/12", "DELETE", APP_ORIGIN)).headers.get("x-middleware-next")).toBe("1");
+  expect((await change("/api/settings", "PUT", "https://other.example")).status).toBe(403);
+  expect((await middleware(request("/login"))).headers.get("location")).toBe(APP_ORIGIN + "/");
+  expect((await middleware(request("/api/auth/login"))).status).toBe(404);
 });
 
 describe("飞书网页登录", () => {

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { canAccessHoe, hoeClient, usesHoeApproval, usesHoeAuth } from "@/lib/auth/hoe";
 import { APPROVAL_ROUTE, APPROVED_SESSION_COOKIE, hasApprovedSession } from "@/lib/auth/approval";
-import { allowsAnonymousRead } from "@/lib/auth/mode";
+import { allowsAnonymousRead, usesPublicWeb } from "@/lib/auth/mode";
 import { digest, hasSession, SESSION_COOKIE } from "@/lib/auth/store";
 
 const PUBLIC_GET = new Set(["/login", "/api/auth/login", "/api/auth/callback"]);
@@ -22,6 +22,12 @@ async function isBotRun(request: NextRequest): Promise<boolean> {
 /** 同时保护控制台、报表和业务 API，飞书 webhook 由自身的验证令牌鉴权。 */
 export async function middleware(request: NextRequest) {
   const path = request.nextUrl.pathname;
+  const publicWeb = usesPublicWeb();
+  if (publicWeb && path === "/login") {
+    return NextResponse.redirect(new URL("/", process.env.APP_PUBLIC_URL || request.url));
+  }
+  if (publicWeb && path.startsWith("/api/auth/")) return new NextResponse(null, { status: 404 });
+
   const hoe = usesHoeAuth();
   const approval = usesHoeApproval();
   if (approval && path === APPROVAL_ROUTE && ["GET", "POST"].includes(request.method)) return NextResponse.next();
@@ -34,15 +40,15 @@ export async function middleware(request: NextRequest) {
 
   const anonymousRead = allowsAnonymousRead();
   const read = request.method === "GET" || request.method === "HEAD";
-  if (anonymousRead && read && path !== "/api/export" && !path.startsWith("/api/auth/")) {
+  const origin = request.headers.get("origin");
+  if (!read && request.method !== "OPTIONS" && origin && origin !== new URL(process.env.APP_PUBLIC_URL || request.url).origin) {
+    return NextResponse.json({ error: "请求来源不合法" }, { status: 403 });
+  }
+
+  if (publicWeb || (anonymousRead && read && path !== "/api/export" && !path.startsWith("/api/auth/"))) {
     const response = NextResponse.next();
     response.headers.set("Cache-Control", "private, no-store");
     return response;
-  }
-
-  const origin = request.headers.get("origin");
-  if (!read && request.method !== "OPTIONS" && origin && origin !== new URL(process.env.APP_PUBLIC_URL ?? request.url).origin) {
-    return NextResponse.json({ error: "请求来源不合法" }, { status: 403 });
   }
 
   try {
