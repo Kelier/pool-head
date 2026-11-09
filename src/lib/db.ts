@@ -118,12 +118,6 @@ function migrate(d: DatabaseSync) {
       key TEXT PRIMARY KEY,
       value TEXT NOT NULL
     );
-    CREATE TABLE IF NOT EXISTS local_admin (
-      id INTEGER PRIMARY KEY CHECK (id = 1),
-      password_hash TEXT NOT NULL,
-      session_hash TEXT,
-      expires_at INTEGER NOT NULL
-    );
     CREATE TABLE IF NOT EXISTS hoe_approval_members (
       user_id TEXT PRIMARY KEY,
       feishu_app_id TEXT NOT NULL,

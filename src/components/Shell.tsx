@@ -24,13 +24,13 @@ const UTIL: Array<{ href: string; name: string; icon: IconName }> = [
 ];
 
 /** 登录页独立展示，业务导航只在控制台加载。 */
-export function Shell({ children }: { children: ReactNode }) {
+export function Shell({ children, guest }: { children: ReactNode; guest: boolean }) {
   const path = usePathname();
-  return path === "/login" || path.startsWith("/local-admin") ? children : <DashboardShell>{children}</DashboardShell>;
+  return path === "/login" ? children : <DashboardShell guest={guest}>{children}</DashboardShell>;
 }
 
 /** 控制台布局和全局状态提示。 */
-function DashboardShell({ children }: { children: ReactNode }) {
+function DashboardShell({ children, guest }: { children: ReactNode; guest: boolean }) {
   const path = usePathname();
   const alerts = useApi<{ unread: number }>("/api/alerts", () => 20_000);
   const tasks = useApi<{ budget: { used: number; limit: number } }>("/api/tasks?pageSize=1", () => 20_000);
@@ -75,9 +75,11 @@ function DashboardShell({ children }: { children: ReactNode }) {
               <div className={`bar ${pct > 90 ? "hot" : pct > 70 ? "warn" : ""}`}><i style={{ width: `${pct}%` }} /></div>
             </div>
           )}
-          <form method="post" action="/api/auth/logout">
-            <button className="btn" type="submit">退出登录</button>
-          </form>
+          {guest ? <Link className="btn" href="/login">管理登录</Link> : (
+            <form method="post" action="/api/auth/logout">
+              <button className="btn" type="submit">退出登录</button>
+            </form>
+          )}
           <div className="util">
             {UTIL.map((it) => (
               <Link key={it.href} href={it.href} className={active(it.href) ? "on" : ""} title={it.name} aria-label={it.name}>

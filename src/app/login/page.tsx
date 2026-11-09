@@ -1,5 +1,3 @@
-import Link from "next/link";
-import { localAdminEnabled } from "@/lib/auth/local-admin";
 import { Logo } from "@/components/Logo";
 import { usesHoeAuth } from "@/lib/auth/hoe";
 import { returnPath } from "@/lib/auth/feishu";
@@ -54,7 +52,6 @@ export default async function LoginPage({ searchParams }: { searchParams: Promis
         ) : (
           <a className={`btn primary ${styles.submit}`} href={`/api/auth/login?next=${encodeURIComponent(returnPath(next))}`}>使用飞书登录</a>
         )}
-        {localAdminEnabled() && <p className={styles.subtitle}><Link href="/local-admin">本地管理员登录</Link></p>}
       </section>
     </main>
   );

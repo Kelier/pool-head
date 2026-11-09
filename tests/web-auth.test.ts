@@ -15,6 +15,7 @@ function request(path: string, cookie?: [string, string]) {
 }
 
 beforeEach(() => {
+  vi.stubEnv("WEB_AUTH_MODE", "feishu");
   vi.stubEnv("APP_PUBLIC_URL", APP_ORIGIN);
   vi.stubEnv("FEISHU_APP_ID", "cli_test");
   vi.stubEnv("FEISHU_APP_SECRET", "test-secret");
@@ -24,6 +25,14 @@ beforeEach(() => {
   vi.stubEnv("SUPABASE_SECRET_KEY", "sb_secret_test");
 });
 afterEach(() => { vi.unstubAllEnvs(); vi.unstubAllGlobals(); });
+
+it.each(["", "public", "local_admin"])("免登录模式 %s 开放任务查看，拦截匿名写入和导出", async (mode) => {
+  vi.stubEnv("WEB_AUTH_MODE", mode);
+  expect((await middleware(request("/tasks/12"))).headers.get("x-middleware-next")).toBe("1");
+  expect((await middleware(request("/api/tasks/12"))).headers.get("x-middleware-next")).toBe("1");
+  expect((await middleware(new NextRequest(APP_ORIGIN + "/api/tasks/12", { method: "DELETE" }))).status).toBe(401);
+  expect((await middleware(request("/api/export?kind=accounts"))).status).toBe(401);
+});
 
 describe("飞书网页登录", () => {
   it("匿名访问控制台或 API 被拦截，退出和导出入口也受保护", async () => {
