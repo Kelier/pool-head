@@ -75,7 +75,7 @@ function DashboardShell({ children, guest }: { children: ReactNode; guest: boole
               <div className={`bar ${pct > 90 ? "hot" : pct > 70 ? "warn" : ""}`}><i style={{ width: `${pct}%` }} /></div>
             </div>
           )}
-          {guest ? <Link className="btn" href="/login">管理登录</Link> : (
+          {!guest && (
             <form method="post" action="/api/auth/logout">
               <button className="btn" type="submit">退出登录</button>
             </form>
