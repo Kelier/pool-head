@@ -174,11 +174,9 @@ VALUES ('HOE 用户 UUID', 'cli_应用 ID', 'ou_用户 Open ID');
 
 登录后在飞书私信完成身份授权，回原浏览器点击「我已授权，继续登录」。审批有效 10 分钟、仅可兑换一次。删除绑定会立即撤销该用户在本站的访问。此模式使用本地 SQLite 保存访问名单和会话。
 
-### 本机备用管理员
+### 免登录查看
 
-在 `.env` 或 `.env.local` 设置 `WEB_AUTH_MODE=local_admin`。开发时运行 `pnpm dev --hostname 127.0.0.1 --port 3111`，生产构建运行 `pnpm build` 后用 `pnpm start` 启动。两者都可使用同一 SQLite 管理员。尚未创建管理员时，运行 `pnpm local-admin` 生成凭证，终端会显示生成的密码。登录入口为 `http://localhost:3111/local-admin`，登录后可在 `/local-admin/reset` 重置。每次生成或重置后有效期为 7 天，旧密码及会话立即失效。
-
-如需通过 Tailscale IPv4 使用该账号，在 `.env` 中启用 `LOCAL_ADMIN_TAILSCALE_ENABLED=1`，并把 `APP_PUBLIC_URL` 设为实际访问地址，例如 `http://100.111.207.33:8888`。启动 Web 服务时将 `--hostname` 设为该部署机器的 Tailscale IPv4，`--port` 设为相同端口。获准访问该机器的 Tailscale 用户可从该地址的 `/local-admin` 登录。
+默认模式 `WEB_AUTH_MODE=public` 允许直接打开总览、竞品、任务和账号库。新建任务、修改设置、删除和导出仍需飞书网页登录，飞书机器人的授权独立配置。通过 Tailscale 使用时，把 `APP_PUBLIC_URL` 设为访问者实际打开的地址，并将 Web 服务绑定到部署机的 Tailscale IPv4。
 
 ## 上线注意
 

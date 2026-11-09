@@ -1,5 +1,4 @@
 import { NextRequest, NextResponse } from "next/server";
-import { localAdminOnly } from "@/lib/auth/local-admin";
 import { approveLogin } from "@/lib/auth/approval";
 import { usesHoeApproval, usesHoeAuth } from "@/lib/auth/hoe";
 import { authOrigin, CALLBACK_PATH, exchangeIdentity, OAUTH_COOKIE, returnPath } from "@/lib/auth/feishu";
@@ -7,7 +6,6 @@ import { createSession, SESSION_COOKIE, SESSION_SECONDS, TOKEN_PATTERN } from "@
 
 /** 验证本次回调，只有飞书身份和账号库均确认成功才发放会话。 */
 export async function GET(request: NextRequest) {
-  if (localAdminOnly()) return new NextResponse(null, { status: 404 });
   if (usesHoeAuth() && !usesHoeApproval()) return new NextResponse(null, { status: 404 });
   const origin = authOrigin();
   const secure = origin.protocol === "https:";

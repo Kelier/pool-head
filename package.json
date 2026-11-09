@@ -10,7 +10,6 @@
     "test": "vitest run",
     "smoke": "tsx scripts/smoke.ts",
     "typecheck": "tsc --noEmit",
-    "local-admin": "node --env-file-if-exists=.env --env-file-if-exists=.env.local --import tsx scripts/local-admin.ts",
     "bot": "node --no-warnings --env-file-if-exists=.env --env-file-if-exists=.env.local --import tsx scripts/feishu-bot.ts"
   },
   "dependencies": {

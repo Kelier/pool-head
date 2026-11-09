@@ -2,19 +2,10 @@ import { NextRequest, NextResponse } from "next/server";
 import { authOrigin } from "@/lib/auth/feishu";
 import { hoeClient, usesHoeApproval, usesHoeAuth } from "@/lib/auth/hoe";
 import { APPROVED_SESSION_COOKIE, revokeApprovedSession } from "@/lib/auth/approval";
-import { isLocalAdminRequest, LOCAL_ADMIN_COOKIE, revokeLocalAdmin } from "@/lib/auth/local-admin";
 import { revokeSession, SESSION_COOKIE } from "@/lib/auth/store";
 
 /** 撤销当前会话后清除浏览器凭证。 */
 export async function POST(request: NextRequest) {
-  const localToken = request.cookies.get(LOCAL_ADMIN_COOKIE)?.value;
-  if (localToken && isLocalAdminRequest(request)) {
-    revokeLocalAdmin(localToken);
-    const response = NextResponse.redirect(new URL("/local-admin", request.nextUrl.origin), 303);
-    response.headers.set("Cache-Control", "no-store");
-    response.cookies.set(LOCAL_ADMIN_COOKIE, "", { path: "/", httpOnly: true, sameSite: "strict", maxAge: 0 });
-    return response;
-  }
   const origin = authOrigin();
   const response = NextResponse.redirect(new URL("/login", origin), 303);
   response.headers.set("Cache-Control", "no-store");
