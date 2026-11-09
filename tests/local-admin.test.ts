@@ -55,3 +55,33 @@ it("本机管理员可显式在生产模式启用，重置后旧凭证失效", a
   const production = await POST(formRequest({ username: "local-admin", password: NEW_PASSWORD }));
   expect(production.cookies.get(LOCAL_ADMIN_COOKIE)?.value).toBeTruthy();
 });
+
+it("显式启用后可通过配置的 Tailscale IPv4 登录并访问控制台", async () => {
+  const publicOrigin = "http://100.111.207.33:8888";
+  const host = new URL(publicOrigin).host;
+  vi.stubEnv("DB_FILE", join(mkdtempSync(join(tmpdir(), "pool-tailscale-admin-")), "test.db"));
+  vi.stubEnv("WEB_AUTH_MODE", "local_admin");
+  vi.stubEnv("APP_PUBLIC_URL", publicOrigin);
+  vi.stubEnv("LOCAL_ADMIN_TAILSCALE_ENABLED", "0");
+  await provisionLocalAdmin(OLD_PASSWORD);
+
+  const login = (origin = publicOrigin) => POST(new NextRequest(publicOrigin + PATH, {
+    method: "POST",
+    headers: { host, origin },
+    body: new URLSearchParams({ username: "local-admin", password: OLD_PASSWORD }),
+  }));
+  expect((await login()).status).toBe(404);
+
+  vi.stubEnv("LOCAL_ADMIN_TAILSCALE_ENABLED", "1");
+  expect((await middleware(new NextRequest(publicOrigin + "/local-admin", { headers: { host } })))
+    .headers.get("x-middleware-next")).toBe("1");
+  expect((await login("http://other.example")).status).toBe(403);
+  const signedIn = await login();
+  expect(signedIn.headers.get("location")).toBe(publicOrigin + "/");
+  const token = signedIn.cookies.get(LOCAL_ADMIN_COOKIE)!.value;
+  const access = (requestedHost: string) => middleware(new NextRequest(publicOrigin + "/api/tasks", {
+    headers: { host: requestedHost, cookie: `${LOCAL_ADMIN_COOKIE}=${token}` },
+  }));
+  expect((await access(host)).headers.get("x-middleware-next")).toBe("1");
+  expect((await access("100.111.207.34:8888")).status).toBe(401);
+});

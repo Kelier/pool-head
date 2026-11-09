@@ -1,4 +1,5 @@
 import { createHash, randomBytes, scrypt, timingSafeEqual } from "node:crypto";
+import { isIPv4 } from "node:net";
 import { promisify } from "node:util";
 import type { NextRequest } from "next/server";
 import { db } from "../db";
@@ -20,8 +21,22 @@ export function localAdminEnabled(): boolean {
   return localAdminOnly() || (process.env.NODE_ENV === "development" && process.env.LOCAL_ADMIN_ENABLED === "1");
 }
 
-/** 外部来源或转发地址不能使用本机备用入口。 */
+/** 仅允许已配置的 Tailscale IPv4 地址使用管理员登录。 */
+function isTailscaleAdminRequest(request: NextRequest): boolean {
+  if (!localAdminOnly() || process.env.LOCAL_ADMIN_TAILSCALE_ENABLED !== "1") return false;
+  const publicUrl = process.env.APP_PUBLIC_URL;
+  const origin = publicUrl ? URL.parse(publicUrl) : null;
+  if (!origin || !isIPv4(origin.hostname)) return false;
+  const [first, second] = origin.hostname.split(".").map(Number);
+  if (first !== 100 || second < 64 || second > 127) return false;
+  return request.nextUrl.origin === origin.origin && request.headers.get("host") === origin.host
+    && (!request.headers.has("x-forwarded-host") || request.headers.get("x-forwarded-host") === origin.host)
+    && !request.headers.has("forwarded");
+}
+
+/** 允许本机登录，以及显式启用的 Tailscale IPv4 登录。 */
 export function isLocalAdminRequest(request: NextRequest): boolean {
+  if (isTailscaleAdminRequest(request)) return true;
   const forwarded = request.headers.get("x-forwarded-for")?.split(",").map((value) => value.trim()) ?? [];
   const forwardedHost = request.headers.get("x-forwarded-host");
   const host = request.headers.get("host");
