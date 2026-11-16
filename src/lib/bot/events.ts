@@ -70,9 +70,10 @@ export async function handleMessageEvent(ev: MessageEvent, deps: EventDeps): Pro
   let text = "";
   try { text = (JSON.parse(m.content) as { text?: string }).text ?? ""; } catch { return reply("消息格式无法识别。"); }
   if (typeof text !== "string") return reply("消息格式无法识别。");
-  const original = text.trim();
-  if (/^npr(?:\s|$)/i.test(original)) {
-    return reply(await handleNpr(original, userId, m.chat_type === "p2p", env, deps.nprRunner));
+  // 群聊文本可能以飞书的 @ 占位符开头，先识别命令，再按会话权限处理。
+  const command = text.trim().replace(/^(?:@_user_\d+\s*)+/, "");
+  if (/^npr(?:\s|$)/i.test(command)) {
+    return reply(await handleNpr(command, userId, m.chat_type === "p2p", env, deps.nprRunner));
   }
   if (agentMode(env) === "off") return reply("自然语言处理已关闭，目前无法处理消息。");
   // 旧写法也作为普通文本解析，不再因为斜杠跳过意图层或确认。

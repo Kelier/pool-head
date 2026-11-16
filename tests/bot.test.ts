@@ -146,7 +146,9 @@ describe("事件处理与权限", () => {
     };
     const url = "https://github.com/Kelier/pool-head/pull/42";
     await handleMessageEvent(msg(`npr ${url}`, {}, "ou_member"), eventDeps);
-    await handleMessageEvent(msg(`npr ${url}`, { chat_type: "group", mentions: [{ key: "@_user_1", id: { open_id: "ou_bot" } }] }), eventDeps);
+    await handleMessageEvent(msg(`@_user_1 npr list ${url}`, { chat_type: "group", mentions: [{ key: "@_user_1", id: { open_id: "ou_bot" } }] }), eventDeps);
+    expect(sent.at(-1)?.payload).toContain("私聊");
+    expect(llmFetch).not.toHaveBeenCalled();
     await handleMessageEvent(msg(`npr list ${url} https://github.com/other/repo/pull/42`), eventDeps);
     await handleMessageEvent(msg(`npr ${url} && whoami`), eventDeps);
     await handleMessageEvent(msg(`npr ${url}`), { ...eventDeps, nprRunner: undefined });
