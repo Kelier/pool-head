@@ -132,7 +132,7 @@ describe("指令", () => {
 });
 
 describe("事件处理与权限", () => {
-  it("只将授权私聊里的明确 NPR 命令交给本机执行器", async () => {
+  it("在授权私聊或白名单群中执行明确的 NPR 命令", async () => {
     const nprRunner = vi.fn(async () => {});
     const llmFetch = vi.fn<typeof fetch>();
     const base = deps();
@@ -146,7 +146,9 @@ describe("事件处理与权限", () => {
     };
     const url = "https://github.com/Kelier/pool-head/pull/42";
     await handleMessageEvent(msg(`npr ${url}`, {}, "ou_member"), eventDeps);
-    await handleMessageEvent(msg(`npr ${url}`, { chat_type: "group", mentions: [{ key: "@_user_1", id: { open_id: "ou_bot" } }] }), eventDeps);
+    await handleMessageEvent(msg(`@_user_1 npr list ${url}`, { chat_type: "group", mentions: [{ key: "@_user_1", id: { open_id: "ou_bot" } }] }), eventDeps);
+    expect(sent.at(-1)?.payload).toContain("私聊");
+    expect(llmFetch).not.toHaveBeenCalled();
     await handleMessageEvent(msg(`npr list ${url} https://github.com/other/repo/pull/42`), eventDeps);
     await handleMessageEvent(msg(`npr ${url} && whoami`), eventDeps);
     await handleMessageEvent(msg(`npr ${url}`), { ...eventDeps, nprRunner: undefined });
@@ -164,6 +166,16 @@ describe("事件处理与权限", () => {
     await handleMessageEvent(msg(`npr list ${url} ${secondUrl}`), eventDeps);
     expect(nprRunner).toHaveBeenCalledTimes(2);
     expect(nprRunner).toHaveBeenLastCalledWith("/usr/local/bin/npr", [url, secondUrl]);
+
+    const groupMessage = () => msg(`@_user_1 npr ${url}`, {
+      chat_id: "oc_team", chat_type: "group",
+      mentions: [{ key: "@_user_1", id: { open_id: "ou_bot" } }],
+    });
+    await handleMessageEvent(groupMessage(), { ...eventDeps, botOpenId: async () => null });
+    expect(nprRunner).toHaveBeenCalledTimes(2);
+    await handleMessageEvent(groupMessage(), eventDeps);
+    expect(nprRunner).toHaveBeenCalledTimes(3);
+    expect(nprRunner).toHaveBeenLastCalledWith("/usr/local/bin/npr", [url]);
 
     nprRunner.mockRejectedValueOnce(Object.assign(new Error("private command output"), { code: 1 }));
     await handleMessageEvent(msg(`npr ${url}`), eventDeps);
