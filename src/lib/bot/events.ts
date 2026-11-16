@@ -52,9 +52,11 @@ export async function handleMessageEvent(ev: MessageEvent, deps: EventDeps): Pro
   if (!firstSeen(m.message_id)) return;
 
   // 群聊只在被 @ 时响应，避免刷屏
+  let botMentioned = false;
   if (m.chat_type === "group") {
     const bot = deps.botOpenId ? await deps.botOpenId() : null;
-    const mentioned = bot ? m.mentions?.some((x) => x.id?.open_id === bot) : (m.mentions?.length ?? 0) > 0;
+    botMentioned = !!bot && !!m.mentions?.some((x) => x.id?.open_id === bot);
+    const mentioned = bot ? botMentioned : (m.mentions?.length ?? 0) > 0;
     if (!mentioned) return;
   }
 
@@ -73,7 +75,10 @@ export async function handleMessageEvent(ev: MessageEvent, deps: EventDeps): Pro
   // 群聊文本可能以飞书的 @ 占位符开头，先识别命令，再按会话权限处理。
   const command = text.trim().replace(/^(?:@_user_\d+\s*)+/, "");
   if (/^npr(?:\s|$)/i.test(command)) {
-    return reply(await handleNpr(command, userId, m.chat_type === "p2p", env, deps.nprRunner));
+    const allowedChat = m.chat_type === "p2p" || (
+      botMentioned && !!env.FEISHU_ALLOWED_CHATS?.split(/[,\s]+/).includes(m.chat_id)
+    );
+    return reply(await handleNpr(command, userId, allowedChat, env, deps.nprRunner));
   }
   if (agentMode(env) === "off") return reply("自然语言处理已关闭，目前无法处理消息。");
   // 旧写法也作为普通文本解析，不再因为斜杠跳过意图层或确认。

@@ -45,12 +45,15 @@ function describeNprFailure(error: unknown): string {
 
 /** 校验命令、发送者和仓库，向飞书返回执行结果。 */
 export async function handleNpr(
-  text: string, userId: string, isPrivate: boolean, env: Env, run?: NprRunner,
+  text: string, userId: string, allowedChat: boolean, env: Env, run?: NprRunner,
 ): Promise<string> {
   const executable = env.FEISHU_NPR_EXECUTABLE?.trim();
   if (!run || !executable || !isAbsolute(executable)) return "PR 审批需要配置本机长连接和 npr 可执行文件的绝对路径。";
-  if (!isPrivate || !env.FEISHU_NPR_OPEN_IDS?.split(/[,\s]+/).includes(userId)) {
-    return "PR 审批仅限获授权的用户私聊机器人使用。";
+  if (!env.FEISHU_NPR_OPEN_IDS?.split(/[,\s]+/).includes(userId)) {
+    return "当前用户没有 PR 审批权限。";
+  }
+  if (!allowedChat) {
+    return "群聊 PR 审批需要在 FEISHU_ALLOWED_CHATS 中登记当前群，并在消息中 @ 本机器人。也可直接私聊。";
   }
   const links = text.split(/\s+/).slice(1);
   if (links[0]?.toLowerCase() === "list") links.shift();

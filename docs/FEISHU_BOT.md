@@ -469,3 +469,5 @@ BOT_LLM_DAILY_CAP=200
 - `FEISHU_NPR_REPOS` 填写允许审批的 `owner/repo`，逗号分隔。
 
 重启长连接后，授权用户可以私聊发送 `npr list https://github.com/OWNER/REPO/pull/123 https://github.com/OWNER/REPO/pull/456`，链接之间用空格隔开。单条链接也可以用 `npr <链接>`，机器人会转成 `npr list <链接>`。审批身份取决于 npr 使用的本机 GitHub 凭证。
+
+要在群聊审批，把群的 `chat_id` 加入 `FEISHU_ALLOWED_CHATS`。获授权用户用飞书的 @ 菜单选中机器人，再发送 `npr <链接>`。
